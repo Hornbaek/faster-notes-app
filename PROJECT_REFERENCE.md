@@ -8,6 +8,11 @@ model. Nothing leaves your machine.
 > This document is a future-reference snapshot of how the project is built and why. For the original
 > landscape/market research see [`app research.md`](app%20research.md); for packaging detail see
 > [`PACKAGING.md`](PACKAGING.md).
+>
+> **Structure (updated 2026-06-26):** the server **and** the phone PWA now live in one public repo,
+> `github.com/Hornbaek/faster-notes-app` — the server at the repo root, the PWA in **`pwa/`** (renamed
+> from `faster-notes/`; its Lovable git link was removed, so it's edited locally now). The marketing
+> site and the published installer are separate repos. **Any `faster-notes/` path below now means `pwa/`.**
 
 ---
 

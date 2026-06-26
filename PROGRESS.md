@@ -1,18 +1,32 @@
 # Faster Notes — Project Progress & State
 
-Single source of truth for the project's current state. Last updated 2026-06-23.
-(Companion docs: [PACKAGING.md](PACKAGING.md) for build/install; plan files under
-`~/.claude/plans/`; detailed change log in Claude's memory `project_faster_notes.md`.)
+Single source of truth for the project's current state. Last updated 2026-06-26.
+(Companion docs: [README.md](README.md) for a quick start, [PACKAGING.md](PACKAGING.md)
+for build/install; plan files under `~/.claude/plans/`.)
+
+## Repository structure (2026-06-26)
+
+This repo — **`faster-notes-app`** (public: `github.com/Hornbaek/faster-notes-app`) —
+holds **both the server and the phone PWA**:
+- **Server** — the Python files at the repo root (`app.py`, `runner.py`, `paths.py`, …)
+  plus `static/` (dashboard), `skills/`, `tests/`.
+- **PWA** — **`pwa/`** (renamed from the old separate `faster-notes/` repo). The Lovable
+  link was cut on 2026-06-26 — edit it here, locally. Built to `pwa/dist/client` and
+  bundled into the exe. The old `github.com/Hornbaek/faster-notes` repo is kept but dormant.
+
+Separate repos: the marketing site (`faster-notes-landing`, private → Cloudflare Pages →
+faster-notes.com) and the published Windows installer (`faster-notes-releases`, public —
+the landing Download button points there). **Any `faster-notes/` path below now means `pwa/`.**
 
 ## What it is
 
 A **local-first voice/notes system**: a Windows tray app (FastAPI server) that
 transcribes audio with **faster-whisper**, post-processes with a local **Ollama** LLM,
-and stores results. A companion **phone PWA** (in `faster-notes/`, built with Lovable —
-TanStack Start + React 19 + Tailwind) captures notes and syncs to the server. All
+and stores results. A companion **phone PWA** (in `pwa/` — TanStack Start + React 19 +
+Tailwind) captures notes and syncs to the server. All
 processing is on your own machine; no cloud accounts required for the core.
 
-## Architecture / key files (parent repo = the server)
+## Architecture / key files
 
 - **`app.py`** — FastAPI app: `/api/*` control plane (dashboard, loopback-only) +
   token-guarded phone **bridge** (`/status`, `/upload`, `/job`, `/result`). Config,
@@ -31,7 +45,8 @@ processing is on your own machine; no cloud accounts required for the core.
 - **`cftunnel.py`** — Cloudflare Tunnel client (download cloudflared + provision via API).
 - **`gsheets.py`** — Google Sheets client, **parked/inert** (see Deferred).
 - **`static/index.html`** — desktop dashboard (single-file, pure JS).
-- **`faster-notes/`** — the phone PWA (its own git repo; Lovable source of truth).
+- **`pwa/`** — the phone PWA (TanStack Start + React; formerly a separate Lovable repo,
+  now edited locally here).
 - **`FasterNotes.spec`** / **`installer.iss`** — PyInstaller one-folder build + Inno
   Setup installer (Program Files, login-autostart, firewall rule for 8766).
 

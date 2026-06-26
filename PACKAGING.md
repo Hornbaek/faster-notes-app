@@ -14,8 +14,8 @@ the phone PWA + bridge on `0.0.0.0:8766` (TLS). All writable data lives under
 
 ## Build steps
 ```bash
-# 1. Build the phone PWA into faster-notes/dist/client (bundled into the exe)
-cd faster-notes && npm install && npm run build:static && cd ..
+# 1. Build the phone PWA into pwa/dist/client (bundled into the exe)
+cd pwa && npm install && npm run build:static && cd ..
 
 # 2. Freeze the tray app into dist/FasterNotes/
 pyinstaller FasterNotes.spec
