@@ -1,0 +1,1154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Faster Notes — Server</title>
+  <script src="https://cdn.jsdelivr.net/npm/qrcodejs/qrcode.min.js"></script>
+  <style>
+    :root {
+      --bg:          oklch(0.16 0.015 280);
+      --s1:          oklch(0.205 0.02 280);
+      --s2:          oklch(0.24 0.02 280);
+      --s3:          oklch(0.275 0.025 280);
+      --border:      oklch(1 0 0 / 8%);
+      --border-hi:   oklch(1 0 0 / 14%);
+      --accent:      oklch(0.68 0.19 285);
+      --accent-hi:   oklch(0.74 0.19 292);
+      --accent-dim:  oklch(0.68 0.19 285 / 0.15);
+      --green:       oklch(0.72 0.16 155);
+      --green-dim:   oklch(0.72 0.16 155 / 0.14);
+      --red:         oklch(0.65 0.24 18);
+      --red-dim:     oklch(0.65 0.24 18 / 0.14);
+      --amber:       oklch(0.79 0.16 80);
+      --amber-dim:   oklch(0.79 0.16 80 / 0.15);
+      --text:        oklch(0.97 0.005 280);
+      --muted:       oklch(0.68 0.025 280);
+      --faint:       oklch(0.46 0.02 280);
+      --r:           12px;
+      --rs:          8px;
+      --rl:          16px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      font-size: 13px;
+      line-height: 1.5;
+      height: 100vh;
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .app { display: flex; height: 100vh; }
+
+    /* ── Sidebar ── */
+    .sidebar {
+      width: 256px;
+      flex-shrink: 0;
+      background: var(--s1);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+    }
+    .sidebar-top { padding: 16px 14px 12px; border-bottom: 1px solid var(--border); }
+    .app-name { display: flex; align-items: center; gap: 9px; }
+    .app-icon {
+      width: 30px; height: 30px;
+      border-radius: 9px;
+      overflow: hidden;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .app-icon img { width: 100%; height: 100%; display: block; }
+    .app-name-text { font-size: 14px; font-weight: 600; color: var(--text); line-height: 1.2; }
+    .app-name-sub { font-size: 10.5px; color: var(--muted); letter-spacing: 0.3px; }
+
+    .status-block { padding: 14px; display: flex; flex-direction: column; gap: 10px; flex: 1; overflow-y: auto; }
+    .status-label { font-size: 9.5px; font-weight: 700; letter-spacing: 0.9px; text-transform: uppercase; color: var(--faint); margin-bottom: 2px; }
+    .status-card {
+      background: var(--s2);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 11px 12px;
+    }
+    .status-row { display: flex; align-items: center; gap: 8px; }
+    .status-row + .status-row { margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--border); }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex-shrink: 0; }
+    .status-dot.on { background: var(--green); box-shadow: 0 0 8px oklch(0.72 0.16 155 / 0.5); }
+    .status-dot.off { background: var(--red); }
+    .status-dot.warn { background: var(--amber); }
+    .status-info { flex: 1; min-width: 0; }
+    .status-name { font-size: 12px; font-weight: 500; color: var(--text); }
+    .status-val { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .sidebar-footer { padding: 12px 14px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
+
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+      padding: 9px 14px;
+      border-radius: var(--rs);
+      border: 1px solid var(--border-hi);
+      background: var(--s2);
+      color: var(--text);
+      font-size: 12.5px; font-weight: 500; font-family: inherit;
+      cursor: pointer; transition: all 0.12s; white-space: nowrap; user-select: none;
+    }
+    .btn:hover:not(:disabled) { background: var(--s3); border-color: var(--border-hi); }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-hi); border-color: var(--accent-hi); }
+    .btn-sm { padding: 5px 11px; font-size: 11.5px; }
+    .btn-block { width: 100%; }
+
+    /* ── Main ── */
+    .main { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+    .topbar {
+      padding: 16px 26px 14px;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 12px; flex-shrink: 0;
+    }
+    .topbar-title { font-size: 16px; font-weight: 600; }
+    .live {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 11px; color: var(--muted);
+      margin-left: auto;
+    }
+    .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); animation: pulse 2s ease-in-out infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+    .content { flex: 1; overflow-y: auto; padding: 22px 26px 30px; }
+    .content::-webkit-scrollbar { width: 8px; }
+    .content::-webkit-scrollbar-thumb { background: var(--s3); border-radius: 4px; }
+
+    .section { margin-bottom: 26px; }
+    .section-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+    .section-title { font-size: 10px; font-weight: 700; letter-spacing: 0.9px; text-transform: uppercase; color: var(--faint); }
+    .section-count {
+      font-size: 10px; font-weight: 600;
+      padding: 1px 7px; border-radius: 10px;
+      background: var(--s2); color: var(--muted);
+    }
+    .search-input {
+      margin-left: auto; width: 220px; max-width: 45%;
+      background: var(--s2); border: 1px solid var(--border);
+      border-radius: var(--rs); color: var(--text);
+      font-size: 12px; padding: 6px 10px; outline: none;
+      transition: border-color 0.15s;
+    }
+    .search-input::placeholder { color: var(--faint); }
+    .search-input:focus { border-color: var(--accent); }
+
+    /* Active job card */
+    .job {
+      background: var(--s1);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 13px 15px;
+      margin-bottom: 9px;
+    }
+    .job-active { border-color: oklch(0.79 0.16 80 / 0.3); background: oklch(0.79 0.16 80 / 0.05); }
+    .job-row { display: flex; align-items: center; gap: 11px; }
+    .job-title { font-size: 13px; font-weight: 500; color: var(--text); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .job-meta { font-size: 11px; color: var(--muted); display: flex; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
+    .job-meta span { display: inline-flex; align-items: center; gap: 4px; }
+    .job-clickable { cursor: pointer; transition: all 0.12s; }
+    .job-clickable:hover { border-color: var(--border-hi); background: var(--s2); }
+
+    .pill { font-size: 9.5px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; padding: 2px 8px; border-radius: 20px; flex-shrink: 0; }
+    .pill-done { background: var(--green-dim); color: var(--green); }
+    .pill-failed { background: var(--red-dim); color: var(--red); }
+    .pill-proc { background: var(--amber-dim); color: var(--amber); }
+
+    .spin {
+      width: 14px; height: 14px;
+      border: 2px solid var(--faint);
+      border-top-color: var(--amber);
+      border-radius: 50%;
+      animation: spini 0.7s linear infinite;
+      flex-shrink: 0;
+    }
+    @keyframes spini { to { transform: rotate(360deg); } }
+
+    .stage-label { font-size: 12px; color: var(--amber); font-weight: 500; }
+
+    .empty {
+      border: 1px dashed var(--border-hi);
+      border-radius: var(--r);
+      padding: 30px 20px;
+      text-align: center;
+      color: var(--muted);
+    }
+    .empty-icon { font-size: 26px; opacity: 0.5; margin-bottom: 8px; }
+    .empty-title { font-size: 13px; font-weight: 500; color: var(--text); margin-bottom: 3px; }
+    .empty-sub { font-size: 12px; color: var(--muted); }
+
+    /* ── Modals ── */
+    .overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,0.62); backdrop-filter: blur(6px);
+      z-index: 100; align-items: center; justify-content: center; padding: 20px;
+    }
+    .overlay.show { display: flex; }
+    .modal {
+      background: var(--s1);
+      border: 1px solid var(--border-hi);
+      border-radius: var(--rl);
+      display: flex; flex-direction: column;
+      overflow: hidden; max-height: 86vh;
+      box-shadow: 0 24px 80px rgba(0,0,0,0.55);
+    }
+    .modal-head {
+      padding: 18px 20px 15px; border-bottom: 1px solid var(--border);
+      display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;
+    }
+    .modal-title { font-size: 15px; font-weight: 600; }
+    .modal-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .modal-close {
+      background: none; border: 1px solid var(--border); border-radius: 6px;
+      color: var(--muted); cursor: pointer; padding: 4px 11px; font-size: 12px; font-family: inherit;
+      transition: all 0.12s; flex-shrink: 0;
+    }
+    .modal-close:hover { border-color: var(--border-hi); color: var(--text); }
+    .modal-body { padding: 18px 20px; overflow-y: auto; }
+
+    .settings-modal { width: 480px; }
+    .settings-section { margin-bottom: 20px; }
+    .settings-section:last-child { margin-bottom: 0; }
+    .model-list { display: flex; flex-direction: column; gap: 5px; }
+    .model-row {
+      display: flex; align-items: center; gap: 11px;
+      padding: 10px 12px; border-radius: var(--rs);
+      border: 1px solid var(--border); cursor: pointer; transition: all 0.1s;
+    }
+    .model-row:hover { border-color: var(--border-hi); background: var(--s2); }
+    .model-row.selected { border-color: oklch(0.68 0.19 285 / 0.45); background: var(--accent-dim); }
+    .model-radio { width: 15px; height: 15px; border-radius: 50%; border: 1.5px solid var(--border-hi); flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+    .model-row.selected .model-radio { border-color: var(--accent); }
+    .model-radio-inner { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); display: none; }
+    .model-row.selected .model-radio-inner { display: block; }
+    .model-row-name { flex: 1; font-size: 12.5px; font-weight: 500; }
+    .model-row-meta { font-size: 10.5px; color: var(--muted); }
+    .running-badge { font-size: 9px; font-weight: 700; padding: 1px 6px; border-radius: 3px; background: var(--green-dim); color: var(--green); }
+    .hint { font-size: 11px; color: var(--muted); line-height: 1.5; margin-top: 8px; }
+    .divider { height: 1px; background: var(--border); margin: 18px 0; }
+
+    /* QR modal */
+    .qr-modal { width: 340px; }
+    .qr-body { padding: 22px 22px 20px; display: flex; flex-direction: column; align-items: center; gap: 14px; }
+    .qr-ips { width: 100%; display: none; flex-direction: column; gap: 6px; }
+    .qr-ips.show { display: flex; }
+    .qr-ips-label { font-size: 10px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; color: var(--faint); }
+    .qr-ips-row { display: flex; gap: 6px; flex-wrap: wrap; }
+    .ip-chip {
+      padding: 6px 11px; border-radius: 20px; border: 1px solid var(--border-hi);
+      background: var(--s2); color: var(--muted); font-size: 11.5px; font-weight: 600;
+      font-family: inherit; cursor: pointer; transition: all 0.12s;
+    }
+    .ip-chip:hover { color: var(--text); border-color: var(--border-hi); }
+    .ip-chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .chip-badge { font-size: 8.5px; font-weight: 800; letter-spacing: 0.4px; text-transform: uppercase; padding: 1px 4px; border-radius: 4px; background: var(--green-dim); color: var(--green); margin-left: 4px; }
+    .ip-chip.active .chip-badge { background: rgba(255,255,255,0.2); color: #fff; }
+    .qr-ips-hint { font-size: 10.5px; color: var(--muted); line-height: 1.5; margin-top: 2px; }
+    .qr-ips-hint b { color: var(--accent); }
+    .qr-steps { width: 100%; display: flex; flex-direction: column; gap: 7px; }
+    .qr-step { display: flex; align-items: baseline; gap: 8px; font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+    .qr-step b { color: var(--accent); font-weight: 700; flex-shrink: 0; }
+    .qr-step .open-url { color: var(--text); font-weight: 600; word-break: break-all; }
+    .qr-step strong { color: var(--text); font-weight: 600; }
+    #qr-code-box { line-height: 0; border-radius: var(--rs); overflow: hidden; padding: 10px; background: #fff; }
+    #qr-code-box canvas, #qr-code-box img { display: block; }
+    .qr-url { font-size: 13px; font-weight: 600; color: var(--accent); word-break: break-all; text-align: center; }
+    .qr-hint { font-size: 11px; color: var(--muted); text-align: center; line-height: 1.6; }
+    .qr-hint strong { color: var(--text); font-weight: 600; }
+    .qr-manual {
+      width: 100%; padding: 10px 12px; background: var(--s2);
+      border: 1px solid var(--border); border-radius: var(--rs);
+      font-size: 11px; color: var(--muted); line-height: 1.8;
+    }
+    .qr-manual .row { display: flex; justify-content: space-between; gap: 10px; }
+    .qr-manual .row span:first-child { color: var(--faint); }
+    .qr-manual code { color: var(--accent); font-size: 11px; word-break: break-all; text-align: right; }
+
+    /* Detail modal */
+    .detail-modal { width: min(640px, 94vw); }
+    .detail-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+    .tag { font-size: 10.5px; padding: 2px 9px; border-radius: 20px; background: var(--accent-dim); color: var(--accent); }
+    .detail-label { font-size: 9.5px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; color: var(--faint); margin: 16px 0 7px; }
+    .detail-label:first-child { margin-top: 0; }
+    .detail-text {
+      background: var(--s2); border: 1px solid var(--border); border-radius: var(--r);
+      padding: 12px 14px; font-size: 13px; line-height: 1.7; color: var(--text); white-space: pre-wrap;
+    }
+
+    #toast {
+      position: fixed; bottom: 22px; left: 50%;
+      transform: translateX(-50%) translateY(10px);
+      background: var(--s3); border: 1px solid var(--border-hi);
+      border-radius: 22px; padding: 8px 18px; font-size: 12px; color: var(--text);
+      z-index: 300; pointer-events: none; opacity: 0; transition: all 0.2s; white-space: nowrap;
+    }
+    #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  </style>
+</head>
+<body>
+
+<div class="app">
+  <aside class="sidebar">
+    <div class="sidebar-top">
+      <div class="app-name">
+        <div class="app-icon"><img src="logo.svg" alt="FasterNotes logo"></div>
+        <div>
+          <div class="app-name-text">Faster Notes</div>
+          <div class="app-name-sub">Transcription server</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="status-block">
+      <div class="status-label">Server status</div>
+      <div class="status-card">
+        <div class="status-row">
+          <div class="status-dot" id="dot-whisper"></div>
+          <div class="status-info">
+            <div class="status-name">Whisper</div>
+            <div class="status-val" id="val-whisper">…</div>
+          </div>
+        </div>
+        <div class="status-row">
+          <div class="status-dot" id="dot-ollama"></div>
+          <div class="status-info">
+            <div class="status-name">Ollama</div>
+            <div class="status-val" id="val-ollama">…</div>
+          </div>
+        </div>
+        <div class="status-row">
+          <div class="status-dot" id="dot-queue"></div>
+          <div class="status-info">
+            <div class="status-name">Queue</div>
+            <div class="status-val" id="val-queue">…</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sidebar-footer">
+      <button class="btn btn-block" id="btn-qr">📱 Connect Phone</button>
+      <button class="btn btn-block" id="btn-skills">🧩 Skills</button>
+      <button class="btn btn-block" id="btn-flow">🔀 Flow</button>
+      <button class="btn btn-block" id="btn-settings">⚙ Settings</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <div class="topbar-title">Server Activity</div>
+      <div class="live"><div class="live-dot"></div> <span id="live-text">Live</span></div>
+    </div>
+
+    <div class="content">
+      <div class="section">
+        <div class="section-head">
+          <div class="section-title">Processing now</div>
+          <div class="section-count" id="active-count">0</div>
+        </div>
+        <div id="active-list"></div>
+      </div>
+
+      <div class="section">
+        <div class="section-head">
+          <div class="section-title">History</div>
+          <div class="section-count" id="history-count">0</div>
+          <input id="history-search" class="search-input" type="search"
+                 placeholder="Search notes…" autocomplete="off" spellcheck="false">
+        </div>
+        <div id="history-list"></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- Settings modal -->
+<div class="overlay" id="settings-overlay">
+  <div class="modal settings-modal">
+    <div class="modal-head">
+      <div>
+        <div class="modal-title">Settings</div>
+        <div class="modal-sub">Transcription &amp; analysis models</div>
+      </div>
+      <button class="modal-close" id="settings-close">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="settings-section">
+        <div class="status-label">Transcription model (Whisper)</div>
+        <div class="model-list" id="whisper-list" style="margin-top:8px"></div>
+        <div class="hint" id="whisper-status">Loading…</div>
+      </div>
+      <div class="divider"></div>
+      <div class="settings-section">
+        <div class="status-label">Analysis model (Ollama)</div>
+        <div style="margin-top:8px"><button class="btn btn-sm" id="btn-scan">🔍 Scan Ollama</button></div>
+        <div class="model-list" id="ollama-list" style="margin-top:8px"></div>
+        <div class="hint">Runs the chosen skill on each transcript. “Auto” picks the first installed model.</div>
+      </div>
+      <div class="divider"></div>
+      <div class="settings-section">
+        <div class="status-label">Orchestration model (skill router)</div>
+        <div class="model-list" id="router-list" style="margin-top:8px"></div>
+        <div class="hint">Reads each incoming transcript and decides which skill handles it. A small, fast model is plenty. “Auto” reuses the analysis model. Scan Ollama above to populate.</div>
+      </div>
+      <div class="divider"></div>
+      <div class="settings-section">
+        <div class="status-label">🔒 Remote sync — coming soon</div>
+        <div class="hint" style="margin-top:6px">Reach your server from anywhere over the internet — no open ports, real HTTPS, zero setup. A managed remote-sync service is on the way. For now, your phone syncs over the local network and queues notes offline until it's back in range.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- QR modal -->
+<div class="overlay" id="qr-overlay">
+  <div class="modal qr-modal">
+    <div class="modal-head">
+      <div>
+        <div class="modal-title">Connect your phone</div>
+        <div class="modal-sub" id="qr-label">Detecting…</div>
+      </div>
+      <button class="modal-close" id="qr-close">✕</button>
+    </div>
+    <div class="qr-body">
+      <div class="qr-ips" id="qr-ips"></div>
+      <div class="qr-steps" id="qr-steps"></div>
+      <div id="qr-code-box"></div>
+      <div class="qr-url" id="qr-url"></div>
+      <div class="qr-hint">The QR is scanned <strong>inside the app</strong> (Scan QR code to pair) — not with your phone's camera.</div>
+      <div class="qr-manual" id="qr-manual"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Detail modal -->
+<div class="overlay" id="detail-overlay">
+  <div class="modal detail-modal">
+    <div class="modal-head">
+      <div>
+        <div class="modal-title" id="detail-title"></div>
+        <div class="modal-sub" id="detail-date"></div>
+      </div>
+      <button class="modal-close" id="detail-close">✕</button>
+    </div>
+    <div class="modal-body" id="detail-body"></div>
+  </div>
+</div>
+
+<!-- Skills modal -->
+<style>
+  .skills-modal{width:820px;max-width:94vw}
+  .skills-modal .modal-body{max-height:80vh}
+  /* Themed scrollbars (match the dark-violet design) — applied to every modal,
+     its textareas, and the test output. */
+  .modal-body, .skills-modal textarea, #sk-test-input, .test-out, .model-list{
+    scrollbar-width:thin; scrollbar-color:var(--s3) transparent}
+  .modal-body::-webkit-scrollbar, .skills-modal textarea::-webkit-scrollbar,
+  #sk-test-input::-webkit-scrollbar, .test-out::-webkit-scrollbar,
+  .model-list::-webkit-scrollbar{width:10px;height:10px}
+  .modal-body::-webkit-scrollbar-thumb, .skills-modal textarea::-webkit-scrollbar-thumb,
+  #sk-test-input::-webkit-scrollbar-thumb, .test-out::-webkit-scrollbar-thumb,
+  .model-list::-webkit-scrollbar-thumb{background:var(--s3);border-radius:6px;border:2px solid var(--s1)}
+  .modal-body::-webkit-scrollbar-thumb:hover, .skills-modal textarea::-webkit-scrollbar-thumb:hover,
+  #sk-test-input::-webkit-scrollbar-thumb:hover, .test-out::-webkit-scrollbar-thumb:hover,
+  .model-list::-webkit-scrollbar-thumb:hover{background:var(--border-hi)}
+  .modal-body::-webkit-scrollbar-track, .skills-modal textarea::-webkit-scrollbar-track,
+  #sk-test-input::-webkit-scrollbar-track, .test-out::-webkit-scrollbar-track,
+  .model-list::-webkit-scrollbar-track{background:transparent}
+  .sk-field{display:block;margin-bottom:11px}
+  .sk-field>span{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}
+  .sk-field input[type=text], .sk-field select, .sk-field textarea,
+  #vault-input, #sk-test-input{
+    width:100%;box-sizing:border-box;background:var(--s1);color:var(--text);
+    border:1px solid var(--border);border-radius:var(--rs);padding:9px 11px;font:inherit}
+  .sk-field textarea, #sk-test-input{resize:vertical;line-height:1.5}
+  .sk-checkrow{display:flex;align-items:center;gap:8px;margin:10px 0;font-size:13px;color:var(--text)}
+  .sk-form-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
+  .btn-primary{background:var(--accent);border-color:var(--accent-hi);color:#fff}
+  .test-out{white-space:pre-wrap;background:var(--bg);border:1px solid var(--border);
+    border-radius:var(--rs);padding:11px;margin-top:9px;max-height:230px;overflow:auto;
+    font-size:12px;color:var(--text)}
+  .skill-item{padding:11px 13px;border:1px solid var(--border);border-radius:var(--r);margin-bottom:9px;background:var(--s1)}
+  .skill-item .si-top{display:flex;align-items:center;gap:9px}
+  .si-star{cursor:pointer;font-size:16px;color:var(--faint);line-height:1;user-select:none}
+  .si-star.on{color:var(--amber)}
+  .si-name{font-weight:600;flex:1;color:var(--text)}
+  .si-desc{font-size:12px;color:var(--muted);margin:5px 0 0 25px}
+  .skill-badge{font-size:10px;letter-spacing:.03em;padding:2px 7px;border-radius:6px;
+    background:var(--s3);color:var(--muted);text-transform:uppercase}
+  .skill-badge.disabled{background:var(--red-dim);color:var(--red)}
+  .si-btns{display:flex;gap:6px;margin:9px 0 0 25px}
+</style>
+<div class="overlay" id="skills-overlay">
+  <div class="modal skills-modal">
+    <div class="modal-head">
+      <div>
+        <div class="modal-title" id="skills-mtitle">Skills</div>
+        <div class="modal-sub" id="skills-msub">What the LLM does with each note</div>
+      </div>
+      <button class="modal-close" id="skills-close">✕</button>
+    </div>
+    <div class="modal-body">
+      <!-- LIST VIEW -->
+      <div id="skills-list-view">
+        <div class="settings-section">
+          <div class="status-label">Notes folder (for “write file” actions)</div>
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <input id="vault-input" type="text" placeholder="e.g. C:\Users\you\Obsidian\Vault">
+            <button class="btn btn-sm" id="vault-save">Save</button>
+          </div>
+          <div class="hint">Where <code>{vault}</code> resolves to. Blank = an <code>exports</code> folder in app data.</div>
+        </div>
+        <div class="divider"></div>
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div class="status-label">Skills</div>
+          <button class="btn btn-sm" id="skill-new">＋ New skill</button>
+        </div>
+        <div class="hint">Each note is auto-routed to the skill whose “when to use” fits best. ★ marks the default fallback.</div>
+        <div id="skills-list" style="margin-top:11px"></div>
+      </div>
+      <!-- EDITOR VIEW -->
+      <div id="skills-edit-view" style="display:none">
+        <label class="sk-field"><span>Name</span><input id="sk-name" type="text" placeholder="e.g. Meeting notes"></label>
+        <label class="sk-field"><span>Description</span><input id="sk-desc" type="text" placeholder="Short description"></label>
+        <label class="sk-field"><span>When to use — the auto-router reads this</span><input id="sk-when" type="text" placeholder="Use when the note is…"></label>
+        <label class="sk-field"><span>Output format</span>
+          <select id="sk-format">
+            <option value="json">json — structured fields (summary, action items, tags, …)</option>
+            <option value="markdown">markdown — freeform prose / document</option>
+          </select>
+        </label>
+        <label class="sk-field"><span>Prompt</span><textarea id="sk-prompt" rows="13" placeholder="Instructions for the model. Use {projects} to inject project ids. The transcript is appended automatically."></textarea></label>
+        <label class="sk-field"><span>Actions — JSON array (advanced)</span><textarea id="sk-actions" rows="4" placeholder='[{"type":"write_file","dir":"{vault}/Notes"}]'></textarea></label>
+        <label class="sk-checkrow"><input id="sk-enabled" type="checkbox" checked> Enabled (available to the router)</label>
+        <div class="divider"></div>
+        <div class="status-label">Test against sample text</div>
+        <textarea id="sk-test-input" rows="4" style="margin-top:8px" placeholder="Paste a sample transcript, then Run test…"></textarea>
+        <div style="margin-top:7px"><button class="btn btn-sm" id="sk-test-run">▶ Run test</button></div>
+        <pre id="sk-test-out" class="test-out" style="display:none"></pre>
+        <div class="sk-form-actions">
+          <button class="btn btn-sm" id="sk-delete" style="margin-right:auto;display:none">Delete</button>
+          <button class="btn btn-sm" id="sk-cancel">Cancel</button>
+          <button class="btn btn-sm btn-primary" id="sk-save">Save skill</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Flow modal -->
+<style>
+  .flow-modal{width:860px;max-width:94vw}
+  .flow-modal .modal-body{overflow-x:auto}
+  #flow-svg{display:block;min-width:760px;width:100%;height:auto}
+  #flow-svg .node{fill:var(--s2);stroke:var(--border-hi)}
+  #flow-svg .node-orch{fill:var(--accent-dim);stroke:var(--accent)}
+  #flow-svg .edge{fill:none;stroke:var(--border-hi);stroke-width:1.5}
+  #flow-svg .t-title{fill:var(--text);font:600 13px var(--font,system-ui)}
+  #flow-svg .t-sub{fill:var(--muted);font:11px var(--font,system-ui)}
+  #flow-svg .t-badge{fill:var(--muted);font:9px var(--font,system-ui)}
+  #flow-svg .star{fill:var(--amber)}
+</style>
+<div class="overlay" id="flow-overlay">
+  <div class="modal flow-modal">
+    <div class="modal-head">
+      <div>
+        <div class="modal-title">Processing flow</div>
+        <div class="modal-sub">How a note travels through the server</div>
+      </div>
+      <button class="modal-close" id="flow-close">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="flow-host"><div class="hint">Loading…</div></div>
+      <div class="hint" style="margin-top:12px">A note (text, audio and/or photos) is read by the <b>orchestrator</b>, which routes it to the best-matching skill. Audio is transcribed first; photos are read by a vision model. ★ marks the default fallback skill.</div>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id)
+
+function esc(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') }
+function fmtDur(s) { if (s == null) return ''; const m = Math.floor(s/60), ss = Math.floor(s%60); return `${m}:${String(ss).padStart(2,'0')}` }
+function timeAgo(iso) {
+  if (!iso) return ''
+  const d = (Date.now() - new Date(iso).getTime()) / 1000
+  if (d < 60) return 'just now'
+  if (d < 3600) return `${Math.floor(d/60)}m ago`
+  if (d < 86400) return `${Math.floor(d/3600)}h ago`
+  return new Date(iso).toLocaleDateString([], {month:'short', day:'numeric'})
+}
+function fmtDateTime(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  return d.toLocaleDateString([], {month:'short',day:'numeric'}) + ' · ' + d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})
+}
+
+let toastTimer
+function toast(msg) {
+  const el = $('toast'); el.textContent = msg; el.classList.add('show')
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), 2600)
+}
+
+// ── Activity polling ─────────────────────────────────────────────────────────
+const STAGE = { queued: 'Queued', transcribing: 'Transcribing…', summarizing: 'Summarizing…' }
+let lastHistory = null
+
+async function loadActivity() {
+  try {
+    const r = await fetch('/api/activity')
+    if (!r.ok) throw new Error()
+    const d = await r.json()
+    renderServer(d.server)
+    renderActive(d.active)
+    if (!searchQuery) renderHistory(d.history)  // don't clobber search results
+    $('live-text').textContent = 'Live'
+  } catch {
+    $('live-text').textContent = 'Reconnecting…'
+  }
+}
+
+function renderServer(s) {
+  $('dot-whisper').className = 'status-dot ' + (s.whisper_ready ? 'on' : 'warn')
+  $('val-whisper').textContent = s.whisper_model + (s.whisper_ready ? '' : ' (loading…)')
+  $('dot-ollama').className = 'status-dot ' + (s.ollama_reachable ? 'on' : 'off')
+  $('val-ollama').textContent = s.ollama_reachable
+    ? (s.analysis_model || 'auto-select') : 'not reachable'
+  const active = s.active_count
+  $('dot-queue').className = 'status-dot ' + (active > 0 ? 'warn' : 'on')
+  $('val-queue').textContent = active > 0 ? `${active} processing` : 'idle'
+}
+
+function renderActive(active) {
+  $('active-count').textContent = active.length
+  const el = $('active-list')
+  if (!active.length) {
+    el.innerHTML = `<div class="empty">
+      <div class="empty-icon">💤</div>
+      <div class="empty-title">Nothing processing</div>
+      <div class="empty-sub">Record a note on your phone — it'll appear here while the server works on it.</div>
+    </div>`
+    return
+  }
+  el.innerHTML = active.map(j => `
+    <div class="job job-active">
+      <div class="job-row">
+        <div class="spin"></div>
+        <div class="job-title">${esc(j.title)}</div>
+        <div class="stage-label">${STAGE[j.status] || j.status}</div>
+      </div>
+      <div class="job-meta">
+        ${j.duration_sec != null ? `<span>⏱ ${fmtDur(j.duration_sec)}</span>` : ''}
+        <span>started ${timeAgo(j.created_at)}</span>
+      </div>
+    </div>
+  `).join('')
+}
+
+let historyCache = []
+function renderHistory(history, isSearch) {
+  historyCache = history
+  $('history-count').textContent = history.length
+  const el = $('history-list')
+  if (!history.length) {
+    el.innerHTML = isSearch
+      ? `<div class="empty">
+          <div class="empty-icon">🔍</div>
+          <div class="empty-title">No matches</div>
+          <div class="empty-sub">Try a different search.</div>
+        </div>`
+      : `<div class="empty">
+          <div class="empty-icon">📭</div>
+          <div class="empty-title">No history yet</div>
+          <div class="empty-sub">Transcribed notes will be logged here.</div>
+        </div>`
+    return
+  }
+  el.innerHTML = history.map((h, i) => `
+    <div class="job job-clickable" data-idx="${i}">
+      <div class="job-row">
+        <div class="job-title">${esc(h.title)}</div>
+        <div class="pill ${h.status === 'done' ? 'pill-done' : 'pill-failed'}">${h.status}</div>
+      </div>
+      <div class="job-meta">
+        <span>${timeAgo(h.completed_at)}</span>
+        ${h.language ? `<span>🌐 ${esc(h.language.toUpperCase())}</span>` : ''}
+        ${h.duration_sec != null ? `<span>⏱ ${fmtDur(h.duration_sec)}</span>` : ''}
+        ${h.model ? `<span>✦ ${esc(h.model)}</span>` : ''}
+      </div>
+    </div>
+  `).join('')
+  el.querySelectorAll('.job-clickable').forEach(node => {
+    node.addEventListener('click', () => openDetail(historyCache[+node.dataset.idx]))
+  })
+}
+
+// ── Detail modal ─────────────────────────────────────────────────────────────
+function openDetail(h) {
+  $('detail-title').textContent = h.title || 'Note'
+  $('detail-date').textContent = fmtDateTime(h.completed_at)
+  let html = ''
+  if (h.error) html += `<div class="detail-label">Error</div><div class="detail-text" style="color:var(--red)">${esc(h.error)}</div>`
+  if (h.skill_id) html += `<div class="detail-meta"><span class="tag">🧩 ${esc(h.skill_id)}</span></div>`
+  if (h.tags && h.tags.length) html += `<div class="detail-meta">${h.tags.map(t => `<span class="tag">#${esc(t)}</span>`).join('')}</div>`
+  if (h.summary) html += `<div class="detail-label">Summary</div><div class="detail-text">${esc(h.summary)}</div>`
+  // Custom skill output (markdown body or extra structured fields).
+  let out = null
+  try { out = h.output_json ? JSON.parse(h.output_json) : null } catch {}
+  if (out) {
+    if (out.body) html += `<div class="detail-label">Note</div><div class="detail-text">${esc(out.body)}</div>`
+    for (const [k, v] of Object.entries(out.fields || {})) {
+      if (['summary','action_items','actions','tags'].includes(k)) continue
+      const val = Array.isArray(v) ? v.map(x => '• ' + x).join('\n') : String(v)
+      if (val.trim()) html += `<div class="detail-label">${esc(k.replace(/_/g,' '))}</div><div class="detail-text">${esc(val)}</div>`
+    }
+    if (Array.isArray(out.fields && out.fields.action_items) && out.fields.action_items.length)
+      html += `<div class="detail-label">Action items</div><div class="detail-text">${out.fields.action_items.map(a => '• ' + esc(a)).join('<br>')}</div>`
+  }
+  if (h.transcript) html += `<div class="detail-label">Transcript</div><div class="detail-text">${esc(h.transcript)}</div>`
+  if (!html) html = '<div class="empty"><div class="empty-sub">No content captured.</div></div>'
+  $('detail-body').innerHTML = html
+  $('detail-overlay').classList.add('show')
+}
+$('detail-close').addEventListener('click', () => $('detail-overlay').classList.remove('show'))
+$('detail-overlay').addEventListener('click', e => { if (e.target === $('detail-overlay')) $('detail-overlay').classList.remove('show') })
+
+// ── Settings: Whisper ────────────────────────────────────────────────────────
+let whisperModels = [], currentWhisper = 'small', loadingWhisper = false
+
+async function loadWhisper() {
+  try {
+    const r = await fetch('/api/whisper/models')
+    const d = await r.json()
+    whisperModels = d.models || []; currentWhisper = d.current || 'small'
+    renderWhisper()
+  } catch { $('whisper-status').textContent = 'Could not load models.' }
+}
+function renderWhisper() {
+  $('whisper-list').innerHTML = whisperModels.map(m => `
+    <div class="model-row${m.id === currentWhisper ? ' selected' : ''}" data-wid="${esc(m.id)}">
+      <div class="model-radio"><div class="model-radio-inner"></div></div>
+      <span class="model-row-name">${esc(m.name)}</span>
+      <span class="model-row-meta">${esc(m.size)} · ${esc(m.note)}</span>
+    </div>`).join('')
+  $('whisper-list').querySelectorAll('.model-row').forEach(row =>
+    row.addEventListener('click', () => setWhisper(row.dataset.wid)))
+  const st = $('whisper-status')
+  st.textContent = loadingWhisper ? 'Loading model, please wait…' : `Active: ${currentWhisper}`
+  st.style.color = loadingWhisper ? 'var(--amber)' : ''
+}
+async function setWhisper(id) {
+  if (id === currentWhisper || loadingWhisper) return
+  loadingWhisper = true; const prev = currentWhisper; currentWhisper = id; renderWhisper()
+  try {
+    const r = await fetch('/api/whisper/model', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ model: id }) })
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    toast(`Whisper switched to ${id}`)
+  } catch (e) { currentWhisper = prev; toast('Failed: ' + e.message) }
+  finally { loadingWhisper = false; renderWhisper() }
+}
+
+// ── Settings: Ollama / analysis / router ─────────────────────────────────────
+let ollamaModels = [], runningModels = [], analysisModel = null, routerModel = null, scanning = false
+
+async function loadAnalysisCurrent() {
+  try {
+    const d = await (await fetch('/api/activity')).json()
+    analysisModel = d.server.analysis_model || null
+    routerModel = d.server.orchestration_model || null
+  } catch {}
+}
+async function scanOllama() {
+  scanning = true; $('btn-scan').innerHTML = '<div class="spin"></div> Scanning…'; $('btn-scan').disabled = true
+  try {
+    const [tr, pr] = await Promise.all([fetch('/api/ollama/models'), fetch('/api/ollama/running')])
+    if (tr.ok) ollamaModels = (await tr.json()).models || []
+    if (pr.ok) runningModels = ((await pr.json()).models || []).map(m => m.name)
+  } catch { toast('Ollama not reachable on localhost:11434') }
+  finally { scanning = false; $('btn-scan').textContent = '🔍 Scan Ollama'; $('btn-scan').disabled = false; renderOllama(); renderRouter() }
+}
+// Shared row renderer for the analysis + router model pickers.
+function renderModelList(listId, autoLabel, current, onPick) {
+  const rows = [{ name: autoLabel, id: null }].concat(ollamaModels.map(m => ({ name: m.name, id: m.name, running: runningModels.includes(m.name) })))
+  $(listId).innerHTML = rows.map(m => `
+    <div class="model-row${m.id === current ? ' selected' : ''}" data-mid="${m.id === null ? '' : esc(m.id)}">
+      <div class="model-radio"><div class="model-radio-inner"></div></div>
+      <span class="model-row-name">${esc(m.name)}</span>
+      ${m.running ? '<span class="running-badge">LOADED</span>' : ''}
+    </div>`).join('')
+  $(listId).querySelectorAll('.model-row').forEach(row => row.addEventListener('click', () => onPick(row.dataset.mid || null)))
+}
+function renderOllama() { renderModelList('ollama-list', 'Auto (first installed)', analysisModel, setAnalysis) }
+function renderRouter() { renderModelList('router-list', 'Auto (use analysis model)', routerModel, setRouter) }
+async function setAnalysis(id) {
+  analysisModel = id; renderOllama()
+  try {
+    await fetch('/api/settings/analysis-model', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ model: id }) })
+    toast(id ? `Analysis model: ${id}` : 'Analysis model: auto')
+  } catch { toast('Could not save analysis model') }
+}
+async function setRouter(id) {
+  routerModel = id; renderRouter()
+  try {
+    await fetch('/api/settings/orchestration-model', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ model: id }) })
+    toast(id ? `Router model: ${id}` : 'Router model: auto')
+  } catch { toast('Could not save router model') }
+}
+
+// ── Settings: Remote access ──────────────────────────────────────────────────
+// The Cloudflare-tunnel provisioning UI was removed while managed "Remote sync"
+// is marked coming soon. The connector still auto-resumes from config in
+// runner.py, and the /api/cloudflare/* endpoints remain (loopback-only) for it.
+
+// ── Settings modal ───────────────────────────────────────────────────────────
+$('btn-settings').addEventListener('click', () => {
+  $('settings-overlay').classList.add('show')
+  if (!whisperModels.length) loadWhisper()
+  loadAnalysisCurrent().then(() => { renderOllama(); renderRouter() })
+})
+$('settings-close').addEventListener('click', () => $('settings-overlay').classList.remove('show'))
+$('settings-overlay').addEventListener('click', e => { if (e.target === $('settings-overlay')) $('settings-overlay').classList.remove('show') })
+$('btn-scan').addEventListener('click', scanOllama)
+
+// ── Skills ───────────────────────────────────────────────────────────────────
+let skillsCache = [], defaultSkillId = null, editingId = null
+
+function hasUserFile(s) { return !s.builtin || s.overridden }
+
+async function openSkills() {
+  $('skills-overlay').classList.add('show')
+  showSkillsList()
+  try {
+    const a = await (await fetch('/api/activity')).json()
+    $('vault-input').value = a.server.vault_dir || ''
+  } catch {}
+  await loadSkills()
+}
+async function loadSkills() {
+  try {
+    const d = await (await fetch('/api/skills')).json()
+    skillsCache = d.skills || []; defaultSkillId = d.default_skill_id
+    renderSkillsList()
+  } catch { $('skills-list').innerHTML = '<div class="hint">Could not load skills.</div>' }
+}
+function renderSkillsList() {
+  $('skills-list').innerHTML = skillsCache.map(s => {
+    const badges = [
+      `<span class="skill-badge">${esc(s.format)}</span>`,
+      s.builtin ? '<span class="skill-badge">built-in</span>' : '',
+      ...(s.actions || []).map(a => `<span class="skill-badge">${esc(a)}</span>`),
+      s.enabled ? '' : '<span class="skill-badge disabled">off</span>',
+    ].join('')
+    const del = hasUserFile(s)
+      ? `<button class="btn btn-sm" data-del="${esc(s.id)}">${s.builtin ? 'Reset' : 'Delete'}</button>` : ''
+    return `<div class="skill-item">
+      <div class="si-top">
+        <span class="si-star${s.id === defaultSkillId ? ' on' : ''}" data-star="${esc(s.id)}" title="Set as default fallback">${s.id === defaultSkillId ? '★' : '☆'}</span>
+        <span class="si-name">${esc(s.name)}</span>${badges}
+      </div>
+      ${s.description ? `<div class="si-desc">${esc(s.description)}</div>` : ''}
+      <div class="si-btns">
+        <button class="btn btn-sm" data-edit="${esc(s.id)}">Edit</button>${del}
+      </div>
+    </div>`
+  }).join('')
+  $('skills-list').querySelectorAll('[data-star]').forEach(n => n.addEventListener('click', () => setDefaultSkill(n.dataset.star)))
+  $('skills-list').querySelectorAll('[data-edit]').forEach(n => n.addEventListener('click', () => editSkill(n.dataset.edit)))
+  $('skills-list').querySelectorAll('[data-del]').forEach(n => n.addEventListener('click', () => deleteSkillUi(n.dataset.del)))
+}
+async function setDefaultSkill(id) {
+  try {
+    const r = await fetch('/api/settings/default-skill', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ skill_id: id }) })
+    if (!r.ok) throw new Error(); defaultSkillId = (await r.json()).default_skill_id; renderSkillsList(); toast('Default skill set')
+  } catch { toast('Could not set default') }
+}
+async function saveVaultDir() {
+  try {
+    await fetch('/api/settings/vault-dir', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ vault_dir: $('vault-input').value.trim() }) })
+    toast('Notes folder saved')
+  } catch { toast('Could not save folder') }
+}
+
+function showSkillsList() {
+  $('skills-list-view').style.display = ''; $('skills-edit-view').style.display = 'none'
+  $('skills-mtitle').textContent = 'Skills'; $('skills-msub').textContent = 'What the LLM does with each note'
+}
+function showSkillsEditor(title) {
+  $('skills-list-view').style.display = 'none'; $('skills-edit-view').style.display = ''
+  $('skills-mtitle').textContent = title; $('skills-msub').textContent = 'Prompt · output · actions'
+  $('sk-test-out').style.display = 'none'; $('sk-test-out').textContent = ''
+}
+function fillEditor(s) {
+  $('sk-name').value = s.name || ''; $('sk-desc').value = s.description || ''
+  $('sk-when').value = s.when_to_use || ''
+  $('sk-format').value = (s.output && s.output.format) || 'json'
+  $('sk-prompt').value = s.prompt || ''
+  $('sk-actions').value = (s.actions && s.actions.length) ? JSON.stringify(s.actions, null, 2) : ''
+  $('sk-enabled').checked = s.enabled !== false
+}
+function newSkill() {
+  editingId = null
+  fillEditor({ output:{format:'json'}, prompt:'You are a voice-note assistant. Read the transcript and return a JSON object with "summary", "action_items" and "tags".\n', enabled:true })
+  $('sk-delete').style.display = 'none'
+  showSkillsEditor('New skill')
+}
+async function editSkill(id) {
+  try {
+    const s = await (await fetch('/api/skills/' + encodeURIComponent(id))).json()
+    editingId = id; fillEditor(s)
+    const summary = skillsCache.find(x => x.id === id)
+    $('sk-delete').style.display = (summary && hasUserFile(summary)) ? '' : 'none'
+    $('sk-delete').textContent = (summary && summary.builtin) ? 'Reset to default' : 'Delete'
+    showSkillsEditor('Edit skill')
+  } catch { toast('Could not open skill') }
+}
+function formSkill() {
+  let actions = []
+  const raw = $('sk-actions').value.trim()
+  if (raw) actions = JSON.parse(raw)  // throws on bad JSON → caught by callers
+  if (!Array.isArray(actions)) throw new Error('Actions must be a JSON array')
+  return {
+    id: editingId || undefined,
+    name: $('sk-name').value.trim(),
+    description: $('sk-desc').value.trim(),
+    when_to_use: $('sk-when').value.trim(),
+    output: { format: $('sk-format').value },
+    actions, enabled: $('sk-enabled').checked, prompt: $('sk-prompt').value,
+  }
+}
+async function saveSkill() {
+  let body
+  try { body = formSkill() } catch (e) { toast('Actions JSON invalid: ' + e.message); return }
+  if (!body.name) { toast('Give the skill a name'); return }
+  try {
+    const r = await fetch('/api/skills', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) })
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    toast('Skill saved'); showSkillsList(); loadSkills()
+  } catch (e) { toast('Save failed: ' + e.message) }
+}
+async function deleteSkillUi(id) {
+  if (!confirm('Delete / reset this skill?')) return
+  try {
+    await fetch('/api/skills/' + encodeURIComponent(id), { method:'DELETE' })
+    toast('Done'); if (editingId === id) showSkillsList(); loadSkills()
+  } catch { toast('Could not delete') }
+}
+async function runSkillTest() {
+  let skill
+  try { skill = formSkill() } catch (e) { toast('Actions JSON invalid: ' + e.message); return }
+  const text = $('sk-test-input').value.trim()
+  if (!text) { toast('Paste some sample text first'); return }
+  const out = $('sk-test-out'); out.style.display = ''; out.textContent = 'Running…'
+  try {
+    const r = await fetch('/api/skills/test', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ text, skill }) })
+    const d = await r.json()
+    if (!r.ok) {
+      out.textContent = d.detail
+        ? `Error ${r.status}: ${d.detail}`
+        : `Error ${r.status} — is Ollama running with a model installed?`
+      return
+    }
+    out.textContent = renderTestOutput(d)
+  } catch (e) { out.textContent = 'Failed: ' + e.message }
+}
+function renderTestOutput(d) {
+  const lines = [`model: ${d.model || '?'}   ·   format: ${d.format}`, '']
+  if (d.summary) lines.push('SUMMARY', d.summary, '')
+  if (d.body) lines.push('BODY', d.body, '')
+  if (d.action_items && d.action_items.length) lines.push('ACTION ITEMS', ...d.action_items.map(a => ' • ' + a), '')
+  if (d.tags && d.tags.length) lines.push('TAGS  ' + d.tags.map(t => '#' + t).join(' '), '')
+  const extra = Object.entries(d.fields || {}).filter(([k]) => !['summary','action_items','tags','actions'].includes(k))
+  for (const [k, v] of extra) lines.push(k.toUpperCase(), Array.isArray(v) ? v.map(x => ' • ' + x).join('\n') : String(v), '')
+  return lines.join('\n').trim()
+}
+
+$('btn-skills').addEventListener('click', openSkills)
+$('skills-close').addEventListener('click', () => $('skills-overlay').classList.remove('show'))
+$('skills-overlay').addEventListener('click', e => { if (e.target === $('skills-overlay')) $('skills-overlay').classList.remove('show') })
+$('vault-save').addEventListener('click', saveVaultDir)
+$('skill-new').addEventListener('click', newSkill)
+$('sk-cancel').addEventListener('click', showSkillsList)
+$('sk-save').addEventListener('click', saveSkill)
+$('sk-delete').addEventListener('click', () => { if (editingId) deleteSkillUi(editingId) })
+$('sk-test-run').addEventListener('click', runSkillTest)
+
+// ── Flow visualization ───────────────────────────────────────────────────────
+async function openFlow() {
+  $('flow-overlay').classList.add('show')
+  $('flow-host').innerHTML = '<div class="hint">Loading…</div>'
+  try {
+    const [sk, act] = await Promise.all([
+      fetch('/api/skills').then(r => r.json()),
+      fetch('/api/activity').then(r => r.json()),
+    ])
+    const enabled = (sk.skills || []).filter(s => s.enabled)
+    const router = act.server.orchestration_model || act.server.analysis_model || 'auto'
+    $('flow-host').innerHTML = buildFlowSvg(enabled, sk.default_skill_id, router)
+  } catch {
+    $('flow-host').innerHTML = '<div class="hint">Could not load the flow.</div>'
+  }
+}
+function buildFlowSvg(skills, defaultId, routerModel) {
+  const n = Math.max(skills.length, 1)
+  const rowH = 58, gap = 14, padY = 28
+  const skillsH = n * rowH + (n - 1) * gap
+  const H = Math.max(skillsH + padY * 2, 250), W = 760
+  const inX = 24, inW = 150, inH = 132
+  const orX = 250, orW = 170, orH = 92
+  const skX = 470, skW = 266
+  const midY = H / 2
+  const startY = (H - skillsH) / 2
+  const inY = midY - inH / 2, orY = midY - orH / 2
+  const trunc = (s, m) => (s && s.length > m ? s.slice(0, m - 1) + '…' : (s || ''))
+
+  let edges = `<path class="edge" d="M${inX + inW},${midY} C${orX - 30},${midY} ${orX - 30},${midY} ${orX},${midY}"/>`
+  let nodes = ''
+  skills.forEach((s, i) => {
+    const y = startY + i * (rowH + gap), cy = y + rowH / 2, c1 = orX + orW + 36
+    edges += `<path class="edge" d="M${orX + orW},${midY} C${c1},${midY} ${c1},${cy} ${skX},${cy}"/>`
+    const def = s.id === defaultId
+    const badges = [s.format, ...(s.actions || [])].filter(Boolean).join('  ·  ')
+    const tx = skX + (def ? 30 : 16)
+    nodes += `<g>
+      <rect class="node" x="${skX}" y="${y}" width="${skW}" height="${rowH}" rx="12"/>
+      ${def ? `<text class="star" x="${skX + 16}" y="${cy}" text-anchor="middle" dominant-baseline="central" font-size="14">★</text>` : ''}
+      <text class="t-title" x="${tx}" y="${y + 23}">${esc(trunc(s.name, 26))}</text>
+      <text class="t-badge" x="${tx}" y="${y + 42}">${esc(badges)}</text>
+    </g>`
+  })
+  const inRows = ['📝  Text', '🎙  Audio', '📷  Image']
+  let inputC = `<text class="t-title" x="${inX + inW / 2}" y="${inY + 26}" text-anchor="middle">Input</text>`
+  inRows.forEach((r, i) => {
+    inputC += `<text class="t-sub" x="${inX + inW / 2}" y="${inY + 54 + i * 24}" text-anchor="middle">${r}</text>`
+  })
+  return `<svg id="flow-svg" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+    ${edges}
+    <g><rect class="node" x="${inX}" y="${inY}" width="${inW}" height="${inH}" rx="14"/>${inputC}</g>
+    <g>
+      <rect class="node-orch" x="${orX}" y="${orY}" width="${orW}" height="${orH}" rx="14"/>
+      <text class="t-title" x="${orX + orW / 2}" y="${orY + 30}" text-anchor="middle">Orchestrator</text>
+      <text class="t-sub" x="${orX + orW / 2}" y="${orY + 50}" text-anchor="middle">routes by content</text>
+      <text class="t-badge" x="${orX + orW / 2}" y="${orY + 70}" text-anchor="middle">⚙ ${esc(trunc(routerModel, 22))}</text>
+    </g>
+    ${nodes}
+  </svg>`
+}
+$('btn-flow').addEventListener('click', openFlow)
+$('flow-close').addEventListener('click', () => $('flow-overlay').classList.remove('show'))
+$('flow-overlay').addEventListener('click', e => { if (e.target === $('flow-overlay')) $('flow-overlay').classList.remove('show') })
+
+// ── QR modal ─────────────────────────────────────────────────────────────────
+let qrInfo = null, qrIp = null
+
+async function openQR() {
+  $('qr-overlay').classList.add('show')
+  $('qr-code-box').innerHTML = '<div class="spin" style="margin:90px auto"></div>'
+  $('qr-url').textContent = ''; $('qr-manual').innerHTML = ''; $('qr-steps').innerHTML = ''
+  $('qr-ips').className = 'qr-ips'; $('qr-ips').innerHTML = ''
+  $('qr-label').textContent = 'Detecting…'
+  try {
+    qrInfo = await (await fetch('/api/info')).json()
+    // Default to the best address: Remote (Cloudflare) when enabled → mDNS → LAN IP.
+    // qrAddresses() is ordered best-first; the LAN chips stay available to switch.
+    qrIp = qrAddresses()[0].value
+    renderIpChips()
+    renderQR()
+  } catch {
+    $('qr-label').textContent = 'Could not detect server'
+    $('qr-code-box').innerHTML = ''
+  }
+}
+function qrAddresses() {
+  const list = (qrInfo.ips || [qrInfo.ip]).map(ip => ({ value: ip, label: ip, port: qrInfo.https_port, stable: false }))
+  if (qrInfo.hostname) list.unshift({ value: qrInfo.hostname, label: qrInfo.hostname, port: qrInfo.https_port, stable: true })
+  // Remote (Cloudflare) — works from anywhere, real TLS, port 443. First choice when on.
+  if (qrInfo.tunnel && qrInfo.tunnel.hostname)
+    list.unshift({ value: qrInfo.tunnel.hostname, label: 'Remote (Cloudflare)', port: 443, remote: true, stable: true })
+  return list
+}
+function currentAddr() {
+  const addrs = qrAddresses()
+  return addrs.find(a => a.value === qrIp) || addrs[0]
+}
+function renderIpChips() {
+  const addrs = qrAddresses()
+  const box = $('qr-ips')
+  if (addrs.length < 2) { box.className = 'qr-ips'; return }  // only show when there's a choice
+  box.className = 'qr-ips show'
+  box.innerHTML = `<div class="qr-ips-label">Pick the address your phone can reach</div>
+    <div class="qr-ips-row">${addrs.map(a => `<button class="ip-chip${a.value === qrIp ? ' active' : ''}" data-ip="${esc(a.value)}">${esc(a.label)}${a.remote ? '<span class="chip-badge">remote</span>' : a.stable ? '<span class="chip-badge">stable</span>' : ''}</button>`).join('')}</div>
+    ${(qrInfo.tunnel && qrInfo.tunnel.hostname)
+        ? `<div class="qr-ips-hint"><b>Remote (Cloudflare)</b> works from anywhere with a trusted certificate — best default. The LAN chips are for same-Wi-Fi use (you'll have to accept the self-signed certificate first).</div>`
+        : (qrInfo.hostname ? `<div class="qr-ips-hint">Tip: <b>${esc(qrInfo.hostname)}</b> keeps working when your IP changes (best on iPhone). If it won't load on the phone, pick an IP instead.</div>` : '')}`
+  box.querySelectorAll('.ip-chip').forEach(c => c.addEventListener('click', () => {
+    qrIp = c.dataset.ip; renderIpChips(); renderQR()
+  }))
+}
+function renderQR() {
+  // LAN: the phone reaches the TLS port 8766 (self-signed → cert warning). Remote
+  // (Cloudflare): port 443 with a real, trusted cert — no warning, works anywhere.
+  const a = currentAddr()
+  const url = a.remote ? `https://${a.value}` : `https://${a.value}:${a.port}`
+  const pairing = { server: a.value, port: a.port, apiKey: qrInfo.apiKey, secure: true }
+  $('qr-label').textContent = 'Pair the Faster Notes app'
+  $('qr-steps').innerHTML = a.remote
+    ? `<div class="qr-step"><b>1.</b><span>On your phone (any network), open <span class="open-url">${esc(url)}</span> — no certificate warning.</span></div>
+       <div class="qr-step"><b>2.</b><span>In the app, tap <strong>Scan QR code to pair</strong> and point it at the code below.</span></div>`
+    : `<div class="qr-step"><b>1.</b><span>On your phone, open <span class="open-url">${esc(url)}</span> and accept the certificate warning (Advanced → Proceed).</span></div>
+       <div class="qr-step"><b>2.</b><span>In the app, tap <strong>Scan QR code to pair</strong> and point it at the code below.</span></div>`
+  $('qr-url').textContent = url
+  const box = $('qr-code-box'); box.innerHTML = ''
+  // Standard dark-on-light QR so the in-app scanner can read it.
+  new QRCode(box, { text: JSON.stringify(pairing), width: 188, height: 188, colorDark: '#0b0b12', colorLight: '#ffffff', correctLevel: QRCode.CorrectLevel.M })
+  $('qr-manual').innerHTML = `
+    <div class="row"><span>Host</span><code>${esc(pairing.server)}</code></div>
+    <div class="row"><span>Port</span><code>${esc(String(pairing.port))}</code></div>
+    <div class="row"><span>API key</span><code>${esc(pairing.apiKey)}</code></div>`
+}
+$('btn-qr').addEventListener('click', openQR)
+$('qr-close').addEventListener('click', () => $('qr-overlay').classList.remove('show'))
+$('qr-overlay').addEventListener('click', e => { if (e.target === $('qr-overlay')) $('qr-overlay').classList.remove('show') })
+
+// ── History search (full-text over past notes) ───────────────────────────────
+let searchQuery = ''
+let searchTimer = null
+function initSearch() {
+  const input = $('history-search')
+  if (!input) return
+  input.addEventListener('input', () => {
+    clearTimeout(searchTimer)
+    searchTimer = setTimeout(() => runSearch(input.value.trim()), 220)
+  })
+}
+async function runSearch(q) {
+  searchQuery = q
+  if (!q) { loadActivity(); return }  // empty query → back to live history
+  try {
+    const r = await fetch('/api/search?q=' + encodeURIComponent(q))
+    if (!r.ok) throw new Error()
+    const d = await r.json()
+    renderHistory(d.results, true)
+  } catch {
+    renderHistory([], true)
+  }
+}
+
+// ── Boot ─────────────────────────────────────────────────────────────────────
+initSearch()
+loadActivity()
+setInterval(loadActivity, 3000)
+// Tray "Pair a phone" deep-links here with ?pair=1 → open the QR straight away.
+if (new URLSearchParams(location.search).has('pair')) openQR()
+</script>
+</body>
+</html>

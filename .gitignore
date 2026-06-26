@@ -1,0 +1,32 @@
+# Secrets — NEVER commit (Cloudflare API token lives here)
+.env
+.env.*
+gsheet-credentials.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# Node / PWA dependencies
+node_modules/
+*~lock~
+
+# Build / packaging output
+build/
+dist/
+*.spec.bak
+
+# Runtime data — now lives under %LOCALAPPDATA%\FasterNotes, but ignore any
+# stray local copies (e.g. when FASTER_NOTES_DATA points at the repo for dev).
+config.json
+notes.json
+activity.json
+cert.pem
+key.pem
+uploads/
+logs/
+models/
+data/

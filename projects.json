@@ -1,0 +1,52 @@
+{
+  "projects": [
+    {
+      "id": "tvisfitness",
+      "name": "TvisFitness System",
+      "description": "Instructor scheduling, shift swapping, and booking system for TvisFitness",
+      "color": "#7b5ef8",
+      "notes": [],
+      "tasks": []
+    },
+    {
+      "id": "dalgas-crm",
+      "name": "Dalgas CRM",
+      "description": "CRM system for Dalgas",
+      "color": "#23d18b",
+      "notes": [],
+      "tasks": []
+    },
+    {
+      "id": "euc-syd-intranet",
+      "name": "EUC Syd Intranet",
+      "description": "Intranet and handbook system for EUC Syd",
+      "color": "#f5a524",
+      "notes": [],
+      "tasks": []
+    },
+    {
+      "id": "horning-floor",
+      "name": "Horning Floor",
+      "description": "Floor renovation project for Horning",
+      "color": "#f47067",
+      "notes": [],
+      "tasks": []
+    },
+    {
+      "id": "personal",
+      "name": "Personal",
+      "description": "Personal notes, reminders, and ideas",
+      "color": "#636380",
+      "notes": [],
+      "tasks": []
+    },
+    {
+      "id": "ai-experiments",
+      "name": "AI Experiments",
+      "description": "Local AI research, prompt engineering, and automation experiments",
+      "color": "#9278ff",
+      "notes": [],
+      "tasks": []
+    }
+  ]
+}
