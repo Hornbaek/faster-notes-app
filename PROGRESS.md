@@ -50,7 +50,7 @@ processing is on your own machine; no cloud accounts required for the core.
 - **`FasterNotes.spec`** / **`installer.iss`** — PyInstaller one-folder build + Inno
   Setup installer (Program Files, login-autostart, firewall rule for 8766).
 
-## Features delivered (all shipped + tested; 62 pytest passing)
+## Features delivered (all shipped + tested; 101 pytest passing)
 
 1. **Base app** — phone records → `/upload` → Whisper transcribe → Ollama summarize →
    results in dashboard + phone. Offline IndexedDB queue, QR/mDNS pairing, same-origin
@@ -79,11 +79,45 @@ processing is on your own machine; no cloud accounts required for the core.
      hardened to never silently lose it.
    - **Spoken-language picker** on Compose (Auto / Svenska / Dansk / English, persisted)
      → forces Whisper's language so it stops mislabeling Danish/Swedish as Norwegian.
+6. **Outputs / Connectors — Phase 1 (server + dashboard).** Faster Notes stays a pure
+   local capture+process engine; this is the opt-in *output side* that pipes a processed
+   note onward into other software. Built on the existing skill-`actions` mechanism:
+   - **`connectors.py`** (pure, mirrors `skills.py`): a bundled **preset library** in
+     `connectors/` (markdown-vault, obsidian-daily, slack/discord/n8n/zapier webhooks),
+     a small **template renderer** (`{{summary}}`, `{{tags | join: ", "}}`,
+     `{{fields.x}}`, `{{secret.NAME}}`), and secret **redaction**.
+   - **Generic `http_request` connector** + extended `write_file` (append / daily-note /
+     templated filename) added to `run_actions`; legacy `webhook`/`append_project` kept.
+   - **Routing**: global **output rules** in config (`outputs`) match a note by
+     `all` / `tags` / `skills`; they run *in addition to* a skill's own actions.
+     Zero-egress by default — nothing leaves unless a rule is added.
+   - **Secret store** in the loopback-only config (`connector_secrets`): set/listed by
+     name, **values never returned to a client** (mirrors the Cloudflare-token rule).
+   - **Delivery outbox** (`deliveries` table in `store.py`) records every send; failed
+     deliveries auto-retry with a background sweep + a manual retry endpoint.
+   - **API** (loopback `/api/*`): `/api/connectors`, `/api/connectors/test` (dry-run,
+     redacted), `/api/connectors/secrets` (GET names / POST / DELETE), `/api/outputs`
+     CRUD, `/api/deliveries` (+ `/{id}/retry`). New dashboard **🔌 Outputs** modal wires
+     it all up. (PWA unchanged; config is a desktop/control-plane concern.)
+   - **Phase 2 — direct-API presets.** Added `notion-page` + `todoist-task` presets on
+     the generic engine, a **`config`** namespace (`{{config.KEY}}`) for non-secret
+     per-target values declared via preset `needs_config` (e.g. a Notion database id;
+     dashboard prompts for them), and a **richer Test** that can actually send and shows
+     the destination's HTTP status + response body (surfacing API errors). Verified live
+     (Phase 1) with a real webhook delivery + the dashboard modal in a browser.
+   - **Phase 3 — email + calendar.** Two new connector types: **`email`** (SMTP via
+     stdlib `smtplib`; starttls/ssl/none; password from `{{secret.X}}`) and **`ics_file`**
+     (zero-auth — writes an all-day calendar `.ics` event into a folder a calendar app /
+     synced dir can import). Presets `email-smtp` + `ics-export`. The dashboard needed no
+     changes — the generic preset/`needs_config` UI renders the SMTP fields automatically.
+     10 bundled presets now span local · webhook · api · email · calendar.
+   - *Next (optional):* Google Calendar/Tasks via OAuth (token+refresh) — deferred as it
+     needs an interactive auth flow; SMTP/ICS cover most needs credential-light.
 
 ## Run / build / test
 
 - **Dev (from source):** `python start.py` (dual server, no tray). Tests:
-  `python -m pytest` (62 passing). PWA dev build: `cd faster-notes && npm run build:static`.
+  `python -m pytest` (101 passing). PWA dev build: `cd faster-notes && npm run build:static`.
 - **Package the app:** `pyinstaller FasterNotes.spec` → `dist/FasterNotes/FasterNotes.exe`
   (**close the running app first** — it locks `dist/`). Installer: `iscc installer.iss`.
 - **⚠️ Local dashboard testing must use port 8765** — `/api/*` is now allowed ONLY on

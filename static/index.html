@@ -337,6 +337,7 @@
     <div class="sidebar-footer">
       <button class="btn btn-block" id="btn-qr">📱 Connect Phone</button>
       <button class="btn btn-block" id="btn-skills">🧩 Skills</button>
+      <button class="btn btn-block" id="btn-connectors">🔌 Outputs</button>
       <button class="btn btn-block" id="btn-flow">🔀 Flow</button>
       <button class="btn btn-block" id="btn-settings">⚙ Settings</button>
     </div>
@@ -569,6 +570,88 @@
     <div class="modal-body">
       <div id="flow-host"><div class="hint">Loading…</div></div>
       <div class="hint" style="margin-top:12px">A note (text, audio and/or photos) is read by the <b>orchestrator</b>, which routes it to the best-matching skill. Audio is transcribed first; photos are read by a vision model. ★ marks the default fallback skill.</div>
+    </div>
+  </div>
+</div>
+
+<!-- Connectors / Outputs modal -->
+<style>
+  .cn-modal{width:820px;max-width:94vw}
+  .cn-modal .modal-body{max-height:82vh}
+  .cn-chip{display:inline-block;font-size:10px;letter-spacing:.03em;padding:2px 7px;border-radius:6px;
+    background:var(--s3);color:var(--muted);text-transform:uppercase;margin-left:6px}
+  .cn-chip.ok{background:var(--green-dim,#16351f);color:var(--green,#4ade80)}
+  .cn-chip.bad{background:var(--red-dim);color:var(--red)}
+  .cn-row{display:flex;align-items:center;gap:9px;padding:10px 12px;border:1px solid var(--border);
+    border-radius:var(--r);margin-bottom:8px;background:var(--s1)}
+  .cn-row .grow{flex:1;min-width:0}
+  .cn-row .cn-name{font-weight:600;color:var(--text)}
+  .cn-row .cn-meta{font-size:11px;color:var(--muted);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cn-secret-add{display:flex;gap:8px;margin-top:8px}
+  .cn-secret-add input{flex:1}
+  .cn-section-head{display:flex;justify-content:space-between;align-items:center;margin-top:4px}
+</style>
+<div class="overlay" id="connectors-overlay">
+  <div class="modal cn-modal">
+    <div class="modal-head">
+      <div>
+        <div class="modal-title">Outputs &amp; Connectors</div>
+        <div class="modal-sub">Pipe each processed note onward — opt-in, runs locally</div>
+      </div>
+      <button class="modal-close" id="connectors-close">✕</button>
+    </div>
+    <div class="modal-body">
+      <!-- Output rules -->
+      <div class="cn-section-head">
+        <div class="status-label">Output rules</div>
+        <button class="btn btn-sm" id="cn-rule-new">＋ New output</button>
+      </div>
+      <div class="hint">A rule sends matching notes to a destination. Nothing leaves your machine unless you add one.</div>
+      <div id="cn-rules" style="margin-top:11px"></div>
+
+      <!-- Rule editor (hidden until New/Edit) -->
+      <div id="cn-rule-edit" style="display:none;margin-top:6px;border:1px solid var(--border);border-radius:var(--r);padding:13px;background:var(--bg)">
+        <label class="sk-field"><span>Name</span><input id="cn-name" type="text" placeholder="e.g. Work notes → Slack"></label>
+        <label class="sk-field"><span>Connector</span><select id="cn-preset"></select></label>
+        <div class="hint" id="cn-preset-info" style="margin:-4px 0 11px"></div>
+        <div id="cn-config-fields"></div>
+        <label class="sk-field"><span>Send when…</span>
+          <select id="cn-match-type">
+            <option value="all">every note</option>
+            <option value="tags">note has any of these tags</option>
+            <option value="skills">note used any of these skills</option>
+          </select>
+        </label>
+        <label class="sk-field" id="cn-match-values-row" style="display:none"><span id="cn-match-values-label">Tags (comma-separated)</span><input id="cn-match-values" type="text" placeholder="work, urgent"></label>
+        <label class="sk-checkrow"><input id="cn-test-send" type="checkbox"> Actually send a test (hits the real API / writes a file)</label>
+        <div style="margin-top:4px"><button class="btn btn-sm" id="cn-test">▶ Test</button></div>
+        <pre id="cn-test-out" class="test-out" style="display:none"></pre>
+        <div class="sk-form-actions">
+          <button class="btn btn-sm" id="cn-cancel">Cancel</button>
+          <button class="btn btn-sm btn-primary" id="cn-save">Save output</button>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <!-- Secrets -->
+      <div class="status-label">Secrets (API keys / webhook URLs)</div>
+      <div class="hint">Stored only on this PC, never shown again, never sent to your phone or over the tunnel. Connectors reference them by name as <code>{{secret.NAME}}</code>.</div>
+      <div id="cn-secrets" style="margin-top:11px"></div>
+      <div class="cn-secret-add">
+        <input id="cn-secret-name" type="text" placeholder="name e.g. slack_webhook_url">
+        <input id="cn-secret-value" type="password" placeholder="value (token / URL)">
+        <button class="btn btn-sm" id="cn-secret-add">Save</button>
+      </div>
+
+      <div class="divider"></div>
+
+      <!-- Delivery log -->
+      <div class="cn-section-head">
+        <div class="status-label">Delivery log</div>
+        <button class="btn btn-sm" id="cn-deliveries-refresh">↻ Refresh</button>
+      </div>
+      <div id="cn-deliveries" style="margin-top:11px"></div>
     </div>
   </div>
 </div>
@@ -1046,6 +1129,188 @@ function buildFlowSvg(skills, defaultId, routerModel) {
 $('btn-flow').addEventListener('click', openFlow)
 $('flow-close').addEventListener('click', () => $('flow-overlay').classList.remove('show'))
 $('flow-overlay').addEventListener('click', e => { if (e.target === $('flow-overlay')) $('flow-overlay').classList.remove('show') })
+
+// ── Connectors / Outputs ──────────────────────────────────────────────────────
+let cnPresets = [], cnSecrets = []
+
+async function openConnectors() {
+  $('connectors-overlay').classList.add('show')
+  $('cn-rule-edit').style.display = 'none'
+  await refreshConnectors()
+  refreshDeliveries()
+}
+async function refreshConnectors() {
+  try {
+    const d = await (await fetch('/api/connectors')).json()
+    cnPresets = d.connectors || []; cnSecrets = d.secrets || []
+  } catch { cnPresets = []; cnSecrets = [] }
+  renderSecrets(); renderRules(); fillPresetSelect()
+}
+function renderSecrets() {
+  const host = $('cn-secrets')
+  host.innerHTML = cnSecrets.length
+    ? cnSecrets.map(n => `<div class="cn-row"><div class="grow"><span class="cn-name">${esc(n)}</span></div>
+        <button class="btn btn-sm" data-secdel="${esc(n)}">Delete</button></div>`).join('')
+    : '<div class="hint">No secrets yet.</div>'
+  host.querySelectorAll('[data-secdel]').forEach(b => b.addEventListener('click', () => deleteSecret(b.dataset.secdel)))
+}
+async function addSecret() {
+  const name = $('cn-secret-name').value.trim(), value = $('cn-secret-value').value
+  if (!name || !value) { toast('Name and value required'); return }
+  try {
+    const r = await fetch('/api/connectors/secrets', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name, value }) })
+    if (!r.ok) throw new Error()
+    $('cn-secret-name').value = ''; $('cn-secret-value').value = ''
+    toast('Secret saved'); refreshConnectors()
+  } catch { toast('Could not save secret') }
+}
+async function deleteSecret(name) {
+  if (!confirm(`Delete secret "${name}"?`)) return
+  try { await fetch('/api/connectors/secrets/' + encodeURIComponent(name), { method:'DELETE' }); toast('Deleted'); refreshConnectors() }
+  catch { toast('Could not delete') }
+}
+async function renderRules() {
+  let rules = []
+  try { rules = (await (await fetch('/api/outputs')).json()).outputs || [] } catch {}
+  const host = $('cn-rules')
+  host.innerHTML = rules.length ? rules.map(r => {
+    const m = r.match || {}, when = m.all ? 'every note'
+      : (m.tags || []).length ? 'tags: ' + m.tags.join(', ')
+      : (m.skills || []).length ? 'skills: ' + m.skills.join(', ') : 'never'
+    const type = (r.connector || {}).type || '?'
+    return `<div class="cn-row">
+      <div class="grow"><span class="cn-name">${esc(r.name || r.id)}</span>${r.enabled === false ? '<span class="cn-chip bad">off</span>' : '<span class="cn-chip ok">on</span>'}<span class="cn-chip">${esc(type)}</span>
+        <div class="cn-meta">${esc(when)}</div></div>
+      <button class="btn btn-sm" data-rtoggle="${esc(r.id)}">${r.enabled === false ? 'Enable' : 'Disable'}</button>
+      <button class="btn btn-sm" data-rdel="${esc(r.id)}">Delete</button>
+    </div>`
+  }).join('') : '<div class="hint">No outputs configured — notes are processed and kept locally only.</div>'
+  window._cnRules = rules
+  host.querySelectorAll('[data-rtoggle]').forEach(b => b.addEventListener('click', () => toggleRule(b.dataset.rtoggle)))
+  host.querySelectorAll('[data-rdel]').forEach(b => b.addEventListener('click', () => deleteRule(b.dataset.rdel)))
+}
+async function toggleRule(id) {
+  const rule = (window._cnRules || []).find(r => r.id === id); if (!rule) return
+  try {
+    await fetch('/api/outputs', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ ...rule, enabled: rule.enabled === false }) })
+    renderRules()
+  } catch { toast('Could not update') }
+}
+async function deleteRule(id) {
+  if (!confirm('Delete this output?')) return
+  try { await fetch('/api/outputs/' + encodeURIComponent(id), { method:'DELETE' }); renderRules() }
+  catch { toast('Could not delete') }
+}
+function fillPresetSelect() {
+  $('cn-preset').innerHTML = cnPresets.map(p => `<option value="${esc(p.id)}">${esc(p.name)} — ${esc(p.family)}</option>`).join('')
+  updatePresetInfo()
+}
+function selectedPreset() { return cnPresets.find(p => p.id === $('cn-preset').value) }
+function updatePresetInfo() {
+  const p = selectedPreset()
+  if (!p) { $('cn-preset-info').textContent = ''; $('cn-config-fields').innerHTML = ''; return }
+  const needs = (p.needs_secrets || []).map(s => {
+    const have = cnSecrets.includes(s)
+    return `<span class="cn-chip ${have ? 'ok' : 'bad'}">${esc(s)} ${have ? '✓' : '— add below'}</span>`
+  }).join(' ')
+  $('cn-preset-info').innerHTML = esc(p.description || '') + (needs ? '<br>Needs secret: ' + needs : '')
+  // Per-target config inputs (e.g. a Notion database id).
+  $('cn-config-fields').innerHTML = (p.needs_config || []).map(c =>
+    `<label class="sk-field"><span>${esc(c.label)}</span>
+      <input type="text" data-cfg="${esc(c.key)}" placeholder="${esc(c.placeholder || '')}"></label>`).join('')
+}
+function collectConfig() {
+  const cfg = {}
+  $('cn-config-fields').querySelectorAll('[data-cfg]').forEach(i => { if (i.value.trim()) cfg[i.dataset.cfg] = i.value.trim() })
+  return cfg
+}
+function buildConnector() {
+  const p = selectedPreset(); if (!p) return null
+  const conn = { ...p.connector }
+  const cfg = collectConfig()
+  if (Object.keys(cfg).length) conn.config = cfg
+  return conn
+}
+function newRule() {
+  $('cn-name').value = ''
+  $('cn-match-type').value = 'all'; $('cn-match-values').value = ''
+  onMatchTypeChange(); fillPresetSelect()
+  $('cn-test-out').style.display = 'none'
+  $('cn-rule-edit').style.display = ''
+}
+function onMatchTypeChange() {
+  const t = $('cn-match-type').value
+  $('cn-match-values-row').style.display = t === 'all' ? 'none' : ''
+  $('cn-match-values-label').textContent = t === 'tags' ? 'Tags (comma-separated)' : 'Skill ids (comma-separated)'
+}
+function buildMatch() {
+  const t = $('cn-match-type').value
+  if (t === 'all') return { all: true }
+  const vals = $('cn-match-values').value.split(',').map(s => s.trim()).filter(Boolean)
+  return t === 'tags' ? { tags: vals } : { skills: vals }
+}
+async function saveRule() {
+  const p = selectedPreset(); if (!p) { toast('Pick a connector'); return }
+  const missing = (p.needs_config || []).filter(c => !collectConfig()[c.key])
+  if (missing.length) { toast('Fill in: ' + missing.map(c => c.label).join(', ')); return }
+  const name = $('cn-name').value.trim() || p.name
+  const body = { name, enabled: true, connector: buildConnector(), match: buildMatch() }
+  try {
+    const r = await fetch('/api/outputs', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) })
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    toast('Output saved'); $('cn-rule-edit').style.display = 'none'; renderRules()
+  } catch (e) { toast('Save failed: ' + e.message) }
+}
+async function testRule() {
+  const conn = buildConnector(); if (!conn) { toast('Pick a connector'); return }
+  const send = $('cn-test-send').checked
+  const out = $('cn-test-out'); out.style.display = ''; out.textContent = send ? 'Sending…' : 'Rendering…'
+  try {
+    const r = await fetch('/api/connectors/test', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ connector: conn, send }) })
+    const d = await r.json()
+    if (!r.ok) { out.textContent = `Error ${r.status}: ${d.detail || ''}`; return }
+    let txt = 'Request that would be sent (secrets hidden):\n\n' + JSON.stringify(d.rendered, null, 2)
+    if (send) {
+      txt += '\n\n— — —\n'
+      if (d.error) txt += 'Send FAILED: ' + d.error
+      else txt += `Sent ✓  HTTP ${d.status_code ?? '(ok)'}${d.ok === false ? '  (the destination rejected it)' : ''}` +
+        (d.response ? '\n\nResponse:\n' + d.response : '')
+    }
+    out.textContent = txt
+  } catch (e) { out.textContent = 'Failed: ' + e.message }
+}
+async function refreshDeliveries() {
+  let items = []
+  try { items = (await (await fetch('/api/deliveries?limit=25')).json()).deliveries || [] } catch {}
+  const host = $('cn-deliveries')
+  host.innerHTML = items.length ? items.map(d => {
+    const cls = d.status === 'sent' ? 'ok' : d.status === 'failed' ? 'bad' : ''
+    const retry = d.status === 'failed' ? `<button class="btn btn-sm" data-retry="${esc(d.id)}">Retry</button>` : ''
+    return `<div class="cn-row"><div class="grow"><span class="cn-name">${esc(d.target || d.connector_name || '?')}</span><span class="cn-chip ${cls}">${esc(d.status)}</span>
+      <div class="cn-meta">${esc(d.connector_name || '')}${d.last_error ? ' · ' + esc(d.last_error) : ''} · ${esc((d.updated_at || '').slice(0,19).replace('T',' '))}</div></div>${retry}</div>`
+  }).join('') : '<div class="hint">No deliveries yet.</div>'
+  host.querySelectorAll('[data-retry]').forEach(b => b.addEventListener('click', () => retryDelivery(b.dataset.retry)))
+}
+async function retryDelivery(id) {
+  try {
+    const r = await (await fetch('/api/deliveries/' + encodeURIComponent(id) + '/retry', { method:'POST' })).json()
+    toast(r.status === 'ok' ? 'Delivered' : 'Still failing: ' + (r.error || '')); refreshDeliveries()
+  } catch { toast('Retry failed') }
+}
+
+$('btn-connectors').addEventListener('click', openConnectors)
+$('connectors-close').addEventListener('click', () => $('connectors-overlay').classList.remove('show'))
+$('connectors-overlay').addEventListener('click', e => { if (e.target === $('connectors-overlay')) $('connectors-overlay').classList.remove('show') })
+$('cn-rule-new').addEventListener('click', newRule)
+$('cn-cancel').addEventListener('click', () => $('cn-rule-edit').style.display = 'none')
+$('cn-save').addEventListener('click', saveRule)
+$('cn-test').addEventListener('click', testRule)
+$('cn-preset').addEventListener('change', updatePresetInfo)
+$('cn-match-type').addEventListener('change', onMatchTypeChange)
+$('cn-secret-add').addEventListener('click', addSecret)
+$('cn-deliveries-refresh').addEventListener('click', refreshDeliveries)
 
 // ── QR modal ─────────────────────────────────────────────────────────────────
 let qrInfo = null, qrIp = null

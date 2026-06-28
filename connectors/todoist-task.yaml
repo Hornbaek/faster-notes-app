@@ -1,0 +1,22 @@
+id: todoist-task
+name: Todoist — create a task
+description: >-
+  Create a Todoist task from each note (the note title becomes the task, the summary
+  its description, tags become labels). Get an API token in Todoist Settings →
+  Integrations → Developer, and store it as the secret 'todoist_token'. Tasks land
+  in your Inbox by default.
+family: api
+needs_secrets: [todoist_token]
+needs_config: []
+connector:
+  type: http_request
+  method: POST
+  url: "https://api.todoist.com/rest/v2/tasks"
+  headers:
+    Authorization: "Bearer {{secret.todoist_token}}"
+  body_type: json
+  body:
+    content: "{{title}}"
+    description: "{{summary}}"
+    labels: "{{tags}}"
+enabled: true

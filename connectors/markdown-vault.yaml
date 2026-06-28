@@ -1,0 +1,12 @@
+id: markdown-vault
+name: Markdown vault (one file per note)
+description: >-
+  Write each processed note as its own Markdown file into a folder you control —
+  e.g. an Obsidian/Logseq vault or a Drive/Dropbox-synced folder. Zero credentials;
+  your data stays in your own files.
+family: local
+needs_secrets: []
+connector:
+  type: write_file
+  dir: "{vault}"
+enabled: true

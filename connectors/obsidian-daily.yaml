@@ -1,0 +1,21 @@
+id: obsidian-daily
+name: Obsidian — append to daily note
+description: >-
+  Append each note under today's daily note (Daily/YYYY-MM-DD.md) in your vault.
+  Great for an Obsidian/Logseq daily-log workflow. Zero credentials.
+family: local
+needs_secrets: []
+connector:
+  type: write_file
+  dir: "{vault}/Daily"
+  filename: "{{date}}.md"
+  mode: append
+  template: |
+    ## {{title}} — {{created_at}}
+
+    {{summary}}
+
+    {{body}}
+
+    Tags: {{tags | join: ", "}}
+enabled: true

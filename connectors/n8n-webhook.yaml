@@ -1,0 +1,24 @@
+id: n8n-webhook
+name: n8n / generic webhook (full note JSON)
+description: >-
+  POST the full structured note (summary, action items, tags, custom fields,
+  transcript) to any webhook — n8n, Make, IFTTT, or your own endpoint. Store the
+  target URL as the secret 'n8n_webhook_url'. From there, automate anything.
+family: webhook
+needs_secrets: [n8n_webhook_url]
+connector:
+  type: http_request
+  method: POST
+  url: "{{secret.n8n_webhook_url}}"
+  body_type: json
+  body:
+    id: "{{id}}"
+    title: "{{title}}"
+    summary: "{{summary}}"
+    action_items: "{{action_items}}"
+    tags: "{{tags}}"
+    fields: "{{fields}}"
+    transcript: "{{transcript}}"
+    skill_id: "{{skill_id}}"
+    created_at: "{{created_at}}"
+enabled: true

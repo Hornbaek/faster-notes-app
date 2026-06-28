@@ -39,9 +39,10 @@ MODELS_DIR = os.path.join(DATA_DIR, "models")
 UPLOADS_DIR = os.path.join(DATA_DIR, "uploads")
 LOGS_DIR = os.path.join(DATA_DIR, "logs")
 SKILLS_DIR = os.path.join(DATA_DIR, "skills")  # user-authored / edited skills
+CONNECTORS_DIR = os.path.join(DATA_DIR, "connectors")  # user-authored / edited output connectors
 BIN_DIR = os.path.join(DATA_DIR, "bin")        # downloaded helper binaries (cloudflared)
 MEDIA_DIR = os.path.join(DATA_DIR, "media")    # persisted recordings (kept for re-transcribe)
-for _d in (MODELS_DIR, UPLOADS_DIR, LOGS_DIR, SKILLS_DIR, BIN_DIR, MEDIA_DIR):
+for _d in (MODELS_DIR, UPLOADS_DIR, LOGS_DIR, SKILLS_DIR, CONNECTORS_DIR, BIN_DIR, MEDIA_DIR):
     os.makedirs(_d, exist_ok=True)
 
 CLOUDFLARED_EXE = os.path.join(BIN_DIR, "cloudflared.exe")
@@ -64,3 +65,4 @@ PWA_DIR = os.path.join(RESOURCE_DIR, "pwa", "dist", "client")
 SKILL_FILE = os.path.join(RESOURCE_DIR, "SKILL_token_optimized_v2.md")
 BUNDLED_PROJECTS_FILE = os.path.join(RESOURCE_DIR, "projects.json")  # seed for PROJECTS_FILE
 BUNDLED_SKILLS_DIR = os.path.join(RESOURCE_DIR, "skills")  # shipped default skills
+BUNDLED_CONNECTORS_DIR = os.path.join(RESOURCE_DIR, "connectors")  # shipped default output connectors

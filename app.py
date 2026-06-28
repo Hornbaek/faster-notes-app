@@ -4,13 +4,16 @@ import os
 import json
 import logging
 import re
+import smtplib
 import socket
 import secrets
+import ssl
 import tempfile
 import threading
 import uuid
 import httpx
-from datetime import datetime
+from datetime import datetime, timezone
+from email.message import EmailMessage
 from contextlib import asynccontextmanager
 
 log = logging.getLogger("faster_notes")
@@ -24,6 +27,7 @@ from pydantic import BaseModel
 import paths
 import store
 import skills
+import connectors
 
 
 def _load_dotenv() -> None:
@@ -182,6 +186,8 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_background_load_whisper())
     # Re-enqueue any uploads stranded on disk by a previous crash/restart.
     recover_orphan_jobs()
+    # Periodically retry output deliveries that failed (destination was down).
+    asyncio.create_task(_delivery_retry_loop())
     yield
 
 
@@ -736,16 +742,145 @@ def _safe_filename(name: str) -> str:
     return name[:80]
 
 
+def read_secrets() -> dict:
+    """Connector credentials, stored only in the loopback-only config and injected
+    into templates at send time. Never returned to a client or bundled into a preset."""
+    return read_config().get("connector_secrets") or {}
+
+
 def _action_write_file(action: dict, job: dict, result: dict) -> None:
-    directory = (action.get("dir") or "{vault}").replace("{vault}", _vault_root())
+    """Write the note to a local Markdown file. Supports an optional templated
+    'filename', 'template' (content), and append 'mode' — so it covers both a
+    one-file-per-note vault and an append-to-daily-note workflow. With none of
+    those set it keeps the original behaviour (one dated file, full render)."""
+    ctx = connectors.build_context(job, result, read_secrets())
+    raw_dir = action.get("dir") or "{vault}"
+    directory = connectors.render(raw_dir, ctx).replace("{vault}", _vault_root())
     os.makedirs(directory, exist_ok=True)
-    stamp = (job.get("created_at") or datetime.now().isoformat())[:10]
-    fname = f"{stamp} {_safe_filename(job.get('title') or 'note')}.md"
+    fname_tpl = action.get("filename")
+    if fname_tpl:
+        fname = _safe_filename(connectors.render(fname_tpl, ctx))
+        if not fname.lower().endswith(".md"):
+            fname += ".md"
+    else:
+        stamp = (job.get("created_at") or datetime.now().isoformat())[:10]
+        fname = f"{stamp} {_safe_filename(job.get('title') or 'note')}.md"
+    content_tpl = action.get("template")
+    if content_tpl:
+        content = connectors.render(content_tpl, ctx)
+        content = content if isinstance(content, str) else str(content)
+    else:
+        content = skills.render_markdown_note(job, result)
+    path = os.path.join(directory, fname)
+    if (action.get("mode") or "write").lower() == "append":
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(content.rstrip() + "\n\n")
+    else:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+
+async def _perform_http_request(req: dict):
+    """Perform a rendered http_request and return the httpx.Response (no raise).
+    Shared by the live action (which then raises on >=400) and the dashboard Test
+    (which shows the status + body, including the destination's own error message)."""
+    url = req.get("url")
+    if not url:
+        raise ValueError("http_request missing 'url'")
+    method = (req.get("method") or "POST").upper()
+    headers = {str(k): str(v) for k, v in (req.get("headers") or {}).items()}
+    body = req.get("body")
+    body_type = (req.get("body_type") or "json").lower()
+    kwargs: dict = {"headers": headers}
+    if body is not None:
+        if body_type == "json":
+            kwargs["json"] = body
+        elif body_type == "form":
+            kwargs["data"] = body
+        else:  # raw
+            kwargs["content"] = body if isinstance(body, (str, bytes)) else json.dumps(body)
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        return await client.request(method, url, **kwargs)
+
+
+async def _action_http_request(action: dict, job: dict, result: dict) -> None:
+    """The generic, templated REST connector — the workhorse behind most presets
+    (automation hubs + direct APIs). The action's url/headers/body are rendered
+    against the note, with {{secret.X}} injected from the loopback-only store."""
+    req = connectors.render_connector(action, job, result, read_secrets())
+    resp = await _perform_http_request(req)
+    resp.raise_for_status()
+
+
+def _action_email(action: dict, job: dict, result: dict) -> None:
+    """Email the note via SMTP. host/from/to/subject/body are templated; the SMTP
+    password comes from {{secret.X}}. Synchronous (run via asyncio.to_thread)."""
+    req = connectors.render_connector(action, job, result, read_secrets())
+    host = req.get("host"); to = req.get("to"); frm = req.get("from")
+    if not host:
+        raise ValueError("email missing 'host'")
+    if not to:
+        raise ValueError("email missing 'to'")
+    if not frm:
+        raise ValueError("email missing 'from'")
+    security = (req.get("security") or "starttls").lower()
+    port = int(req.get("port") or (465 if security == "ssl" else 25 if security == "none" else 587))
+    username, password = req.get("username"), req.get("password")
+    msg = EmailMessage()
+    msg["Subject"] = req.get("subject") or (job.get("title") or "Note")
+    msg["From"] = frm
+    msg["To"] = to
+    msg.set_content(req.get("body") or result.get("summary") or "")
+    if security == "ssl":
+        with smtplib.SMTP_SSL(host, port, timeout=20, context=ssl.create_default_context()) as s:
+            if username and password:
+                s.login(username, password)
+            s.send_message(msg)
+    else:
+        with smtplib.SMTP(host, port, timeout=20) as s:
+            s.ehlo()
+            if security == "starttls":
+                s.starttls(context=ssl.create_default_context())
+                s.ehlo()
+            if username and password:
+                s.login(username, password)
+            s.send_message(msg)
+
+
+def _ics_escape(text: str) -> str:
+    """Escape a value for an iCalendar TEXT field (RFC 5545)."""
+    return (text or "").replace("\\", "\\\\").replace("\n", "\\n").replace(",", "\\,").replace(";", "\\;")
+
+
+def _action_ics_file(action: dict, job: dict, result: dict) -> None:
+    """Write the note as a calendar event (.ics) into a folder — point a calendar
+    app or a synced folder at it. Zero credentials; an all-day event on the note's
+    date. Synchronous (run via asyncio.to_thread)."""
+    ctx = connectors.build_context(job, result, read_secrets(), action.get("config"))
+    raw_dir = action.get("dir") or "{vault}/Calendar"
+    directory = connectors.render(raw_dir, ctx).replace("{vault}", _vault_root())
+    os.makedirs(directory, exist_ok=True)
+    summary = connectors.render(action.get("summary") or "{{title}}", ctx) or (job.get("title") or "Note")
+    description = connectors.render(action.get("description") or "{{summary}}", ctx) or ""
+    summary = summary if isinstance(summary, str) else str(summary)
+    description = description if isinstance(description, str) else str(description)
+    date = (job.get("created_at") or datetime.now().isoformat())[:10].replace("-", "")
+    uid = f"{job.get('id') or uuid.uuid4().hex}@faster-notes"
+    dtstamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    ics = "\r\n".join([
+        "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Faster Notes//EN", "CALSCALE:GREGORIAN",
+        "BEGIN:VEVENT", f"UID:{uid}", f"DTSTAMP:{dtstamp}", f"DTSTART;VALUE=DATE:{date}",
+        f"SUMMARY:{_ics_escape(summary)}", f"DESCRIPTION:{_ics_escape(description)}",
+        "END:VEVENT", "END:VCALENDAR", "",
+    ])
+    fname = f"{date} {_safe_filename(summary)}.ics"
     with open(os.path.join(directory, fname), "w", encoding="utf-8") as f:
-        f.write(skills.render_markdown_note(job, result))
+        f.write(ics)
 
 
 async def _action_webhook(action: dict, job: dict, result: dict) -> None:
+    """Legacy simple webhook: POST a fixed note payload to a URL. Kept for
+    back-compat; new presets use the richer 'http_request' connector."""
     url = action.get("url")
     if not url:
         raise ValueError("webhook action missing 'url'")
@@ -777,26 +912,150 @@ def _action_append_project(action: dict, job: dict, result: dict) -> None:
     raise ValueError(f"unknown project '{pid}'")
 
 
+async def _dispatch_action(typ: str, action: dict, job: dict, result: dict) -> None:
+    """Run one connector action by type. Raises on failure (the caller records it)."""
+    if typ == "write_file":
+        await asyncio.to_thread(_action_write_file, action, job, result)
+    elif typ == "http_request":
+        await _action_http_request(action, job, result)
+    elif typ == "email":
+        await asyncio.to_thread(_action_email, action, job, result)
+    elif typ == "ics_file":
+        await asyncio.to_thread(_action_ics_file, action, job, result)
+    elif typ == "webhook":
+        await _action_webhook(action, job, result)
+    elif typ == "append_project":
+        await asyncio.to_thread(_action_append_project, action, job, result)
+    else:
+        raise ValueError(f"unknown action type '{typ}'")
+
+
+def _matching_output_rules(job: dict, result: dict) -> list[tuple[str, dict]]:
+    """Global output rules (config 'outputs') whose match fits this note. These run
+    in addition to a skill's own actions, so outputs aren't trapped inside one skill."""
+    tags = result.get("tags") or job.get("tags") or []
+    skill_id = result.get("skill_id") or job.get("skill_id")
+    out: list[tuple[str, dict]] = []
+    for rule in read_config().get("outputs") or []:
+        if not rule.get("enabled", True):
+            continue
+        connector = rule.get("connector") or {}
+        if not connector.get("type"):
+            continue
+        if connectors.rule_matches(rule.get("match") or {}, tags, skill_id):
+            out.append((f"rule:{rule.get('name') or rule.get('id') or '?'}", connector))
+    return out
+
+
+async def _run_one_action(source: str, action: dict, job: dict, result: dict) -> None:
+    """Run a single output and record the attempt in the delivery outbox. Isolated:
+    one failure never fails the note (errors land on the job + a 'failed' delivery)."""
+    typ = (action.get("type") or "").strip()
+    secret_map = read_secrets()
+    # Render only to compute a readable, secret-free target label for the log; the
+    # actual dispatch re-renders from the original action so config/secrets apply.
+    rendered = connectors.render_connector(action, job, result, secret_map)
+    target = connectors.redact(connectors.describe_target(rendered), secret_map)
+    delivery_id = f"dlv_{job.get('id', '')}_{uuid.uuid4().hex[:8]}"
+    now = datetime.now().isoformat()
+    base = {
+        "id": delivery_id, "job_id": job.get("id"), "connector_name": source,
+        "target": target, "connector_json": json.dumps(action, ensure_ascii=False),
+        "created_at": now,
+    }
+    try:
+        await _dispatch_action(typ, action, job, result)
+        store.add_delivery({**base, "status": "sent", "attempts": 1, "last_error": None,
+                            "updated_at": datetime.now().isoformat()})
+        log.info("[job %s] output '%s' (%s) delivered", job.get("id"), source, typ)
+    except Exception as exc:
+        job.setdefault("action_errors", []).append(f"{typ}: {exc}")
+        store.add_delivery({**base, "status": "failed", "attempts": 1, "last_error": str(exc),
+                            "updated_at": datetime.now().isoformat()})
+        log.warning("[job %s] output '%s' (%s) failed: %s", job.get("id"), source, typ, exc)
+
+
 async def run_actions(skill: dict, job: dict, result: dict) -> None:
-    """Execute a skill's downstream actions. Best-effort: each action is isolated
-    so one failure (bad webhook, read-only path) never fails the note; errors are
-    logged and recorded on the job for the dashboard."""
-    for action in skill.get("actions") or []:
-        typ = (action.get("type") or "").strip()
+    """Execute all outputs for a processed note: the skill's own actions (back-compat)
+    plus any global output rules that match the note's tags/skill. Each is isolated
+    and recorded in the delivery outbox."""
+    outputs: list[tuple[str, dict]] = [
+        (f"skill:{skill.get('id') or '?'}", a) for a in (skill.get("actions") or [])
+    ]
+    outputs += _matching_output_rules(job, result)
+    for source, action in outputs:
+        await _run_one_action(source, action, job, result)
+
+
+# ── Delivery outbox: reconstruct + retry failed sends ─────────────────────────
+
+MAX_DELIVERY_ATTEMPTS = 5
+DELIVERY_RETRY_INTERVAL = 120  # seconds between background retry sweeps
+
+
+def _reconstruct_job_result(job_id: str) -> tuple[dict, dict]:
+    """Rebuild a (job, result) pair from the archived note so a delivery can be
+    retried long after the in-memory job is gone (e.g. after a restart)."""
+    a = store.get_activity(job_id) or {}
+    try:
+        output = json.loads(a.get("output_json") or "{}")
+    except (ValueError, TypeError):
+        output = {}
+    job = {
+        "id": job_id, "title": a.get("title"), "transcript": a.get("transcript") or "",
+        "created_at": a.get("created_at"), "language": a.get("language"),
+        "tags": a.get("tags") or [], "skill_id": a.get("skill_id"),
+    }
+    result = {
+        "skill_id": a.get("skill_id"), "summary": a.get("summary") or "",
+        "action_items": a.get("action_items") or [], "tags": a.get("tags") or [],
+        "fields": output.get("fields") or {}, "body": output.get("body") or "",
+        "format": output.get("format") or "json",
+    }
+    return job, result
+
+
+async def retry_delivery(delivery_id: str) -> dict:
+    """Re-run a recorded delivery. Updates its status/attempts; raises on failure."""
+    d = store.get_delivery(delivery_id)
+    if not d:
+        raise ValueError("unknown delivery")
+    action = json.loads(d.get("connector_json") or "{}")
+    typ = (action.get("type") or "").strip()
+    job, result = _reconstruct_job_result(d.get("job_id"))
+    attempts = (d.get("attempts") or 0) + 1
+    try:
+        await _dispatch_action(typ, action, job, result)
+        store.update_delivery(delivery_id, status="sent", attempts=attempts,
+                              last_error=None, updated_at=datetime.now().isoformat())
+        return store.get_delivery(delivery_id)
+    except Exception as exc:
+        store.update_delivery(delivery_id, status="failed", attempts=attempts,
+                              last_error=str(exc), updated_at=datetime.now().isoformat())
+        raise
+
+
+_retry_started = False
+
+
+async def _delivery_retry_loop() -> None:
+    """Periodically re-attempt failed deliveries (up to MAX_DELIVERY_ATTEMPTS), so a
+    momentarily-down destination recovers on its own. Run-once across both servers."""
+    global _retry_started
+    if _retry_started:
+        return
+    _retry_started = True
+    while True:
+        await asyncio.sleep(DELIVERY_RETRY_INTERVAL)
         try:
-            if typ == "write_file":
-                await asyncio.to_thread(_action_write_file, action, job, result)
-            elif typ == "webhook":
-                await _action_webhook(action, job, result)
-            elif typ == "append_project":
-                await asyncio.to_thread(_action_append_project, action, job, result)
-            else:
-                log.warning("[job %s] unknown action type '%s'", job.get("id"), typ)
-                continue
-            log.info("[job %s] action '%s' done", job.get("id"), typ)
+            for d in store.list_deliveries(status="failed"):
+                if (d.get("attempts") or 0) < MAX_DELIVERY_ATTEMPTS:
+                    try:
+                        await retry_delivery(d["id"])
+                    except Exception:
+                        pass  # stays 'failed'; retried again next sweep until the cap
         except Exception as exc:
-            log.warning("[job %s] action '%s' failed: %s", job.get("id"), typ, exc)
-            job.setdefault("action_errors", []).append(f"{typ}: {exc}")
+            log.warning("delivery retry sweep failed: %s", exc)
 
 
 def _read_images_b64(image_paths: list[str]) -> list[str]:
@@ -1402,6 +1661,177 @@ async def set_vault_dir(payload: VaultDirIn):
     cfg["vault_dir"] = (payload.vault_dir or "").strip() or None
     write_config(cfg)
     return {"status": "ok", "vault_dir": cfg["vault_dir"]}
+
+
+# ── Output connectors (pipe processed notes onward) ──────────────────────────
+#
+# Loopback-only like the rest of /api/*. Connector PRESETS describe destinations;
+# OUTPUT RULES wire a connector to notes (all / by tag / by skill); SECRETS hold
+# the credentials (stored only here, never returned to a client, never bundled).
+
+class SecretIn(BaseModel):
+    name: str
+    value: str
+
+
+class OutputRuleIn(BaseModel):
+    id: str | None = None
+    name: str
+    enabled: bool = True
+    connector: dict
+    match: dict | None = None
+
+
+class ConnectorTestIn(BaseModel):
+    connector: dict
+    text: str | None = None
+    send: bool = False
+
+
+def _preset_summary(p: dict) -> dict:
+    # The connector spec only references secrets by name ({{secret.X}}), so it is
+    # safe to return — it never contains a credential value.
+    return {
+        "id": p["id"], "name": p.get("name"), "description": p.get("description"),
+        "family": p.get("family"), "needs_secrets": p.get("needs_secrets", []),
+        "needs_config": p.get("needs_config", []),
+        "connector": p.get("connector", {}), "source": p.get("source"),
+        "builtin": p.get("builtin", False), "overridden": p.get("overridden", False),
+    }
+
+
+def _secret_names() -> list[str]:
+    return sorted((read_config().get("connector_secrets") or {}).keys())
+
+
+@app.get("/api/connectors")
+async def list_connectors():
+    return {"connectors": [_preset_summary(p) for p in connectors.load_presets()],
+            "secrets": _secret_names()}
+
+
+@app.get("/api/connectors/secrets")
+async def list_secrets():
+    """Secret NAMES only — values are never returned (they may leave over a tunnel)."""
+    return {"names": _secret_names()}
+
+
+@app.post("/api/connectors/secrets")
+async def set_secret(payload: SecretIn):
+    name = (payload.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Secret needs a name")
+    cfg = read_config()
+    smap = dict(cfg.get("connector_secrets") or {})
+    smap[name] = payload.value
+    cfg["connector_secrets"] = smap
+    write_config(cfg)
+    return {"names": sorted(smap.keys())}
+
+
+@app.delete("/api/connectors/secrets/{name}")
+async def delete_secret(name: str):
+    cfg = read_config()
+    smap = dict(cfg.get("connector_secrets") or {})
+    smap.pop(name, None)
+    cfg["connector_secrets"] = smap
+    write_config(cfg)
+    return {"names": sorted(smap.keys())}
+
+
+def _sample_job_result(text: str | None) -> tuple[dict, dict]:
+    """A (job, result) pair to render a connector against for the Test/dry-run."""
+    if text:
+        now = datetime.now().isoformat()
+        job = {"id": "test", "title": "Test note", "transcript": text, "created_at": now,
+               "language": "en", "tags": ["example"], "skill_id": "quick-note"}
+        result = {"skill_id": "quick-note", "summary": text[:280], "tags": ["example"],
+                  "action_items": ["example action"], "fields": {}, "body": "", "format": "json"}
+        return job, result
+    recent = store.list_activity(limit=1)
+    if recent:
+        return _reconstruct_job_result(recent[0]["id"])
+    now = datetime.now().isoformat()
+    job = {"id": "test", "title": "Test note", "transcript": "This is a test note.",
+           "created_at": now, "language": "en", "tags": ["example"], "skill_id": "quick-note"}
+    result = {"skill_id": "quick-note", "summary": "This is a test note.", "tags": ["example"],
+              "action_items": [], "fields": {}, "body": "", "format": "json"}
+    return job, result
+
+
+@app.post("/api/connectors/test")
+async def test_connector(payload: ConnectorTestIn):
+    """Dry-run a connector: render the exact request (secrets redacted), and only
+    actually send if 'send' is true. Mirrors /api/skills/test."""
+    connector = payload.connector or {}
+    if not connector.get("type"):
+        raise HTTPException(status_code=400, detail="connector needs a type")
+    secret_map = read_config().get("connector_secrets") or {}
+    job, result = _sample_job_result(payload.text)
+    rendered = connectors.render_connector(connector, job, result, secret_map)
+    out = {"rendered": connectors.redact(rendered, secret_map), "sent": False}
+    if payload.send:
+        try:
+            if connector.get("type") == "http_request":
+                resp = await _perform_http_request(rendered)
+                out.update(sent=True, ok=resp.status_code < 400,
+                           status_code=resp.status_code, response=(resp.text or "")[:600])
+            else:
+                await _dispatch_action(connector.get("type"), connector, job, result)
+                out.update(sent=True, ok=True)
+        except Exception as exc:
+            out["error"] = str(exc) or type(exc).__name__
+    return out
+
+
+@app.get("/api/outputs")
+async def list_outputs():
+    return {"outputs": read_config().get("outputs") or []}
+
+
+@app.post("/api/outputs")
+async def upsert_output(payload: OutputRuleIn):
+    if not (payload.connector or {}).get("type"):
+        raise HTTPException(status_code=400, detail="connector needs a type")
+    cfg = read_config()
+    outputs = list(cfg.get("outputs") or [])
+    rid = payload.id or f"out_{uuid.uuid4().hex[:8]}"
+    rule = {"id": rid, "name": payload.name, "enabled": payload.enabled,
+            "connector": payload.connector, "match": payload.match or {}}
+    for i, r in enumerate(outputs):
+        if r.get("id") == rid:
+            outputs[i] = rule
+            break
+    else:
+        outputs.append(rule)
+    cfg["outputs"] = outputs
+    write_config(cfg)
+    return {"status": "ok", "output": rule}
+
+
+@app.delete("/api/outputs/{rule_id}")
+async def delete_output(rule_id: str):
+    cfg = read_config()
+    cfg["outputs"] = [r for r in (cfg.get("outputs") or []) if r.get("id") != rule_id]
+    write_config(cfg)
+    return {"status": "ok"}
+
+
+@app.get("/api/deliveries")
+async def get_deliveries(limit: int = 100):
+    return {"deliveries": store.list_deliveries(limit=limit)}
+
+
+@app.post("/api/deliveries/{delivery_id}/retry")
+async def retry_one_delivery(delivery_id: str):
+    if not store.get_delivery(delivery_id):
+        raise HTTPException(status_code=404, detail="Unknown delivery")
+    try:
+        await retry_delivery(delivery_id)
+    except Exception as exc:
+        return {"status": "failed", "error": str(exc) or type(exc).__name__,
+                "delivery": store.get_delivery(delivery_id)}
+    return {"status": "ok", "delivery": store.get_delivery(delivery_id)}
 
 
 # ── Remote access (Cloudflare Tunnel) — loopback-only control plane ──────────

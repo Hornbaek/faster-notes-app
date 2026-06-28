@@ -1,0 +1,15 @@
+id: slack-webhook
+name: Slack (Incoming Webhook)
+description: >-
+  Post a note summary to a Slack channel via an Incoming Webhook URL. Create the
+  webhook in Slack, then store the URL as the secret 'slack_webhook_url'.
+family: webhook
+needs_secrets: [slack_webhook_url]
+connector:
+  type: http_request
+  method: POST
+  url: "{{secret.slack_webhook_url}}"
+  body_type: json
+  body:
+    text: "*{{title}}*\n{{summary}}\n\nTags: {{tags | join: \", \"}}"
+enabled: true

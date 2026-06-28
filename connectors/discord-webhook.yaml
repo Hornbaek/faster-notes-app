@@ -1,0 +1,15 @@
+id: discord-webhook
+name: Discord (Webhook)
+description: >-
+  Post a note summary to a Discord channel via a channel Webhook URL. Store the
+  URL as the secret 'discord_webhook_url'.
+family: webhook
+needs_secrets: [discord_webhook_url]
+connector:
+  type: http_request
+  method: POST
+  url: "{{secret.discord_webhook_url}}"
+  body_type: json
+  body:
+    content: "**{{title}}**\n{{summary}}"
+enabled: true

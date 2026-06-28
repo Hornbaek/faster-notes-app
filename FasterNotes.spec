@@ -25,6 +25,7 @@ datas += [
     ("SKILL_token_optimized_v2.md", "."),
     ("projects.json", "."),
     ("skills", "skills"),          # bundled default skills (read-only defaults)
+    ("connectors", "connectors"),  # bundled default output connectors (read-only defaults)
 ]
 
 a = Analysis(

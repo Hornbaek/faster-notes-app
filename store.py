@@ -77,6 +77,16 @@ def _get_conn() -> sqlite3.Connection:
         for col, decl in _ADDED_COLS.items():
             if col not in existing:
                 conn.execute(f"ALTER TABLE activity ADD COLUMN {col} {decl}")
+        # Output-delivery outbox: one row per attempt to push a note to a connector.
+        # Lets the dashboard show a delivery log and retry failed sends.
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS deliveries (
+                   id TEXT PRIMARY KEY,
+                   job_id TEXT, connector_name TEXT, target TEXT,
+                   status TEXT, attempts INTEGER, last_error TEXT,
+                   connector_json TEXT, created_at TEXT, updated_at TEXT
+               )"""
+        )
         try:
             conn.execute(
                 """CREATE VIRTUAL TABLE IF NOT EXISTS activity_fts USING fts5(
@@ -207,3 +217,62 @@ def search_activity(q: str, limit: int = 50) -> list[dict]:
             (like, like, like, limit),
         ).fetchall()
     return [_row_to_entry(r) for r in rows]
+
+
+# ── Output delivery outbox ────────────────────────────────────────────────────
+
+_DELIVERY_COLS = [
+    "id", "job_id", "connector_name", "target", "status", "attempts",
+    "last_error", "connector_json", "created_at", "updated_at",
+]
+
+
+def add_delivery(entry: dict) -> None:
+    row = {k: entry.get(k) for k in _DELIVERY_COLS}
+    conn = _get_conn()
+    with _lock:
+        conn.execute(
+            f"INSERT OR REPLACE INTO deliveries ({','.join(_DELIVERY_COLS)}) "
+            f"VALUES ({','.join('?' for _ in _DELIVERY_COLS)})",
+            [row[k] for k in _DELIVERY_COLS],
+        )
+        conn.commit()
+
+
+def update_delivery(delivery_id: str, **patch) -> None:
+    fields = {k: v for k, v in patch.items() if k in _DELIVERY_COLS and k != "id"}
+    if not fields:
+        return
+    conn = _get_conn()
+    with _lock:
+        sets = ", ".join(f"{k}=?" for k in fields)
+        conn.execute(
+            f"UPDATE deliveries SET {sets} WHERE id=?",
+            [*fields.values(), delivery_id],
+        )
+        conn.commit()
+
+
+def get_delivery(delivery_id: str) -> dict | None:
+    conn = _get_conn()
+    with _lock:
+        row = conn.execute("SELECT * FROM deliveries WHERE id=?", (delivery_id,)).fetchone()
+    return {k: row[k] for k in _DELIVERY_COLS} if row else None
+
+
+def list_deliveries(limit: int = 100, status: str | None = None) -> list[dict]:
+    conn = _get_conn()
+    with _lock:
+        if status:
+            rows = conn.execute(
+                "SELECT * FROM deliveries WHERE status=? "
+                "ORDER BY COALESCE(updated_at, created_at, '') DESC LIMIT ?",
+                (status, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM deliveries "
+                "ORDER BY COALESCE(updated_at, created_at, '') DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+    return [{k: r[k] for k in _DELIVERY_COLS} for r in rows]

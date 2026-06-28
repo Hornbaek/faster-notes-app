@@ -1,0 +1,22 @@
+id: zapier-webhook
+name: Zapier (Catch Hook)
+description: >-
+  POST the full structured note to a Zapier "Catch Hook" trigger, then build a Zap
+  to route it anywhere Zapier supports. Store the hook URL as 'zapier_hook_url'.
+family: webhook
+needs_secrets: [zapier_hook_url]
+connector:
+  type: http_request
+  method: POST
+  url: "{{secret.zapier_hook_url}}"
+  body_type: json
+  body:
+    id: "{{id}}"
+    title: "{{title}}"
+    summary: "{{summary}}"
+    action_items: "{{action_items}}"
+    tags: "{{tags}}"
+    fields: "{{fields}}"
+    transcript: "{{transcript}}"
+    created_at: "{{created_at}}"
+enabled: true

@@ -1,0 +1,15 @@
+id: ics-export
+name: Calendar event (.ics file)
+description: >-
+  Write each note as a calendar event (.ics) into a folder — point your calendar app
+  or a synced folder at it to import. Zero credentials: an all-day event on the note's
+  date, titled with the note and described with its summary.
+family: calendar
+needs_secrets: []
+needs_config: []
+connector:
+  type: ics_file
+  dir: "{vault}/Calendar"
+  summary: "{{title}}"
+  description: "{{summary}}"
+enabled: true

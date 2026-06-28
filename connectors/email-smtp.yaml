@@ -1,0 +1,31 @@
+id: email-smtp
+name: Email (SMTP)
+description: >-
+  Email each note via your own SMTP server. Store the SMTP password as the secret
+  'smtp_password'; fill host, username, from and to. Works with Gmail
+  (smtp.gmail.com, port 587, an app password), Fastmail, your own server, etc.
+family: email
+needs_secrets: [smtp_password]
+needs_config:
+  - {key: smtp_host, label: "SMTP host", placeholder: "smtp.gmail.com"}
+  - {key: smtp_username, label: "SMTP username", placeholder: "you@gmail.com"}
+  - {key: from_addr, label: "From address", placeholder: "you@gmail.com"}
+  - {key: to_addr, label: "To address", placeholder: "you@gmail.com"}
+connector:
+  type: email
+  host: "{{config.smtp_host}}"
+  port: 587
+  security: starttls
+  username: "{{config.smtp_username}}"
+  password: "{{secret.smtp_password}}"
+  from: "{{config.from_addr}}"
+  to: "{{config.to_addr}}"
+  subject: "Note: {{title}}"
+  body: |
+    {{summary}}
+
+    Tags: {{tags | join: ", "}}
+
+    ---
+    {{transcript}}
+enabled: true
