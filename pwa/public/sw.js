@@ -7,7 +7,11 @@
  * IndexedDB and the sync layer uploads them when the server is reachable again.
  *
  * Caching policy:
- *   - GET navigations  -> serve the cached app shell ("/"), SPA router handles routes
+ *   - GET navigations  -> network-first: fetch the live shell when online (so a
+ *                         rebuilt PWA's new hashed asset names are always picked up),
+ *                         fall back to the cached shell only when offline. A
+ *                         cache-first shell would keep referencing deleted
+ *                         /assets/*.js after a rebuild and crash the app.
  *   - GET static assets-> stale-while-revalidate (hashed /assets/*, icons, manifest)
  *   - API/bridge calls -> never cached; always network (so we never serve a stale
  *                         job status or replay an upload)
@@ -15,7 +19,7 @@
  *
  * Bump CACHE when the precache list or strategy changes to evict old caches.
  */
-const CACHE = "faster-notes-v1";
+const CACHE = "faster-notes-v2";
 const SHELL = "/";
 const PRECACHE = [
   "/",
@@ -64,10 +68,20 @@ self.addEventListener("fetch", (event) => {
   // API/bridge GETs: never cache (live job status, reachability check, etc.).
   if (isApi(url.pathname)) return;
 
-  // SPA navigations: serve the cached shell so the app opens with no network.
+  // SPA navigations: network-first. Fetch the live shell so a rebuilt PWA (new
+  // hashed asset names) is always picked up when online; refresh the cached shell
+  // for offline use, and fall back to it only when the network is unavailable.
   if (req.mode === "navigate") {
     event.respondWith(
-      caches.match(SHELL).then((cached) => cached || fetch(req))
+      fetch(req)
+        .then((res) => {
+          if (res && res.ok) {
+            const copy = res.clone();
+            caches.open(CACHE).then((c) => c.put(SHELL, copy)).catch(() => {});
+          }
+          return res;
+        })
+        .catch(() => caches.match(SHELL).then((c) => c || Response.error()))
     );
     return;
   }
