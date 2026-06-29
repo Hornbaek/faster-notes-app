@@ -80,7 +80,21 @@ export function QrScanner({ open, onClose, onPaired }: Props) {
     if (!open || manual) return;
     let cancelled = false;
     let handled = false;
-    let stop: (() => Promise<void>) | null = null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let scanner: any = null;
+    let started = false;
+
+    // Fully tear the camera down (idempotent). html5-qrcode injects its own <video>
+    // DOM into the region; if React unmounts that subtree while the camera is still
+    // live — e.g. the parent navigates away the instant we pair — the unmount throws a
+    // removeChild error that the root error boundary shows as "something went wrong".
+    // So stop + clear and AWAIT it before doing anything that can unmount us.
+    const teardown = async () => {
+      if (!scanner || !started) return;
+      started = false;
+      try { await scanner.stop(); } catch { /* already stopped */ }
+      try { await scanner.clear(); } catch { /* nothing to clear */ }
+    };
 
     (async () => {
       try {
@@ -92,11 +106,13 @@ export function QrScanner({ open, onClose, onPaired }: Props) {
         const inner = document.createElement("div");
         inner.id = "qr-scanner-region";
         el.appendChild(inner);
-        const scanner = new mod.Html5Qrcode(inner.id, { verbose: false });
+        scanner = new mod.Html5Qrcode(inner.id, { verbose: false });
         await scanner.start(
           { facingMode: "environment" },
           { fps: 10, qrbox: { width: 240, height: 240 } },
           (text) => {
+            // The decode callback fires ~10×/second; guard so we pair exactly once.
+            if (handled) return;
             try {
               const data = JSON.parse(text);
               const result = validatePairing({
@@ -106,14 +122,10 @@ export function QrScanner({ open, onClose, onPaired }: Props) {
                 secure: data.secure,
               });
               if (result.ok) {
-                // The decode callback fires ~10×/second; without this guard
-                // onPaired runs repeatedly (mid-unmount/navigation) and throws,
-                // which the error overlay surfaces as "something went wrong" even
-                // though the first call already paired successfully.
-                if (handled) return;
                 handled = true;
-                scanner.stop().catch(() => {});
-                onPairedRef.current(result.value);
+                // Camera DOWN first, THEN hand the pairing to the parent — otherwise
+                // the parent's navigate/close unmounts us mid-stream and crashes.
+                void teardown().finally(() => onPairedRef.current(result.value));
               } else {
                 setError(result.error);
               }
@@ -123,7 +135,8 @@ export function QrScanner({ open, onClose, onPaired }: Props) {
           },
           () => {}
         );
-        stop = () => scanner.stop().then(() => scanner.clear());
+        started = true;
+        if (cancelled) void teardown(); // unmounted while the camera was starting
       } catch (e) {
         console.error(e);
         setError("Couldn't open the camera. Use manual entry instead.");
@@ -133,7 +146,7 @@ export function QrScanner({ open, onClose, onPaired }: Props) {
 
     return () => {
       cancelled = true;
-      stop?.().catch(() => {});
+      void teardown();
     };
   }, [open, manual]);
 
